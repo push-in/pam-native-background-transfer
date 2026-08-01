@@ -1,5 +1,7 @@
 <?php
 declare(strict_types=1);
+$packageAutoload = dirname(__DIR__).'/vendor/autoload.php';
+if (is_file($packageAutoload)) require $packageAutoload;
 $roots=['Pam\\Native\\BackgroundTransfer\\'=>dirname(__DIR__).'/src/','Pam\\Native\\Testing\\'=>dirname(__DIR__,2).'/pam-native-testing/src/','Pam\\Native\\'=>dirname(__DIR__,2).'/../pam-native/packages/native/src/'];
 spl_autoload_register(static function(string $class)use($roots):void{foreach($roots as $prefix=>$root){if(str_starts_with($class,$prefix)){$file=$root.str_replace('\\','/',substr($class,strlen($prefix))).'.php';if(is_file($file))require$file;return;}}});
 use Pam\Native\BackgroundTransfer\BackgroundTransfer;use Pam\Native\BackgroundTransfer\TransferState;use Pam\Native\Internal\Wire;use Pam\Native\Testing\NativeTestHarness;
