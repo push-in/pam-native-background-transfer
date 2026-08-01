@@ -1,0 +1,10 @@
+{
+  "$schema":"vendor/pushinbr/pam-native-plugin-kit/resources/pam-native.idl.schema.json",
+  "version":1,"namespace":"Pam.BackgroundTransfer",
+  "enums":{
+    "TransferKind":{"Download":1,"Upload":2},
+    "TransferState":{"Queued":1,"Running":2,"Succeeded":3,"Failed":4,"Cancelled":5},
+    "NetworkRequirement":{"Connected":1,"Unmetered":2,"NotRoaming":3}
+  },
+  "records":{"TransferSnapshot":{"identifier":"string","kind":"TransferKind","state":"TransferState","bytesTransferred":"int","bytesTotal":"int"}}
+}
