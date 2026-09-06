@@ -56,7 +56,7 @@ precondition(safeDestination == canonicalRoot.appendingPathComponent("documents/
 for invalid in ["", "/absolute.pdf", "..", "../outside/secret.txt", "escape/secret.txt", "escape/new.pdf"] {
     do {
         _ = try TransferPath.resolve(invalid, root: root)
-        fatalError("Path outside transfer root accepted")
+        fatalError("Path outside transfer root accepted: \(invalid)")
     } catch { }
 }
 let pending = root.appendingPathComponent("pending")
