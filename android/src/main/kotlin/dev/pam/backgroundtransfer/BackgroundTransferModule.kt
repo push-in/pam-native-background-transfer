@@ -47,7 +47,7 @@ class BackgroundTransferModule(context: Context) : NativeModule {
                     .putString(TransferWorker.URL, values.text("url"))
                     .putString(TransferWorker.PATH, values.text("path"))
                     .build(),
-            ).addTag(TAG).build()
+            ).addTag(TAG).addTag(TransferIdentity.tag(kind.toInt())).build()
         workManager.enqueue(request)
         return mapOf("identifier" to WireValue.Text(request.id.toString()))
     }
@@ -58,7 +58,7 @@ class BackgroundTransferModule(context: Context) : NativeModule {
         val output = if (info.state == WorkInfo.State.RUNNING) info.progress else info.outputData
         return mapOf(
             "identifier" to WireValue.Text(identifier),
-            "kind" to WireValue.Integer(output.getInt(TransferWorker.KIND, 1).toLong()),
+            "kind" to WireValue.Integer(TransferIdentity.kind(info.tags, output.getInt(TransferWorker.KIND, 0)).toLong()),
             "state" to WireValue.Integer(info.state.toTransferState()),
             "bytesTransferred" to WireValue.Integer(output.getLong(TransferWorker.TRANSFERRED, 0)),
             "bytesTotal" to WireValue.Integer(output.getLong(TransferWorker.TOTAL, 0)),
