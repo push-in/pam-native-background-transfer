@@ -24,7 +24,7 @@ jobs:
           path: sdk
       - name: Test HTTP results and persistence failure precedence
         run: |
-          swiftc -swift-version 5 plugin/ios/Sources/TransferHttpResult.swift plugin/ios/Sources/TransferHeaders.swift plugin/tests/ios-http/main.swift -o "$RUNNER_TEMP/transfer-http-tests"
+          swiftc -swift-version 5 plugin/ios/Sources/TransferHttpResult.swift plugin/ios/Sources/TransferHeaders.swift plugin/ios/Sources/TransferPath.swift plugin/tests/ios-http/main.swift -o "$RUNNER_TEMP/transfer-http-tests"
           "$RUNNER_TEMP/transfer-http-tests"
       - name: Prepare isolated transfer package
         run: |

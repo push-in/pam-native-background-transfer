@@ -40,3 +40,32 @@ precondition(TransferPhase.allows(current: Int(TransferPhase.queued.rawValue), n
 precondition(TransferPhase.allows(current: Int(TransferPhase.running.rawValue), next: TransferPhase.completed.rawValue))
 precondition(!TransferPhase.allows(current: 99, next: TransferPhase.running.rawValue))
 print("PASS terminal transfer state precedence")
+
+let files = FileManager.default
+let fixture = files.temporaryDirectory.appendingPathComponent("pam-transfer-path-" + UUID().uuidString)
+let root = fixture.appendingPathComponent("allowed")
+let outside = fixture.appendingPathComponent("outside")
+try files.createDirectory(at: root, withIntermediateDirectories: true)
+try files.createDirectory(at: outside, withIntermediateDirectories: true)
+defer { try? files.removeItem(at: fixture) }
+try Data("private".utf8).write(to: outside.appendingPathComponent("secret.txt"))
+try files.createSymbolicLink(at: root.appendingPathComponent("escape"), withDestinationURL: outside)
+let canonicalRoot = root.resolvingSymlinksInPath()
+let safeDestination = try TransferPath.resolve("documents/new.pdf", root: root)
+precondition(safeDestination == canonicalRoot.appendingPathComponent("documents/new.pdf"))
+for invalid in ["", "/absolute.pdf", "..", "../outside/secret.txt", "escape/secret.txt", "escape/new.pdf"] {
+    do {
+        _ = try TransferPath.resolve(invalid, root: root)
+        fatalError("Path outside transfer root accepted")
+    } catch { }
+}
+let pending = root.appendingPathComponent("pending")
+try files.createDirectory(at: pending, withIntermediateDirectories: true)
+let original = try TransferPath.resolve("pending/new.pdf", root: root)
+try files.removeItem(at: pending)
+try files.createSymbolicLink(at: pending, withDestinationURL: outside)
+do {
+    _ = try TransferPath.validate(original, root: root)
+    fatalError("Changed destination parent escaped transfer root")
+} catch { }
+print("PASS transfer file path confinement")

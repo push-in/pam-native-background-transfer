@@ -58,7 +58,7 @@ private final class TransferCoordinator:NSObject,URLSessionDownloadDelegate,URLS
             let key = "dev.pam.transfer.\(p.id).state"
             guard TransferPhase.allows(current: defaults.object(forKey: key) as? Int,
                                        next: TransferPhase.running.rawValue) else { return }
-            let target = URL(fileURLWithPath: p.path)
+            let target = try TransferPath.validate(URL(fileURLWithPath: p.path), root: transferRoot)
             try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: target.path) {
                 _ = try FileManager.default.replaceItemAt(target, withItemAt: location)
@@ -83,7 +83,12 @@ private final class TransferCoordinator:NSObject,URLSessionDownloadDelegate,URLS
              total: max(task.countOfBytesExpectedToReceive, task.countOfBytesExpectedToSend), message: result.message)
     }
     func urlSession(_ session:URLSession,downloadTask:URLSessionDownloadTask,didWriteData bytesWritten:Int64,totalBytesWritten:Int64,totalBytesExpectedToWrite:Int64){let p=parts(downloadTask);save(id:p.id,kind:p.kind,state:2,transferred:totalBytesWritten,total:totalBytesExpectedToWrite,message:"")}
-    private func safeURL(_ path:String)throws->URL{let root=FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0];let target=root.appendingPathComponent(path).standardizedFileURL;guard target.path.hasPrefix(root.standardizedFileURL.path+"/") else{throw TransferError.invalidPath};return target}
+    private var transferRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    }
+    private func safeURL(_ path: String) throws -> URL {
+        try TransferPath.resolve(path, root: transferRoot)
+    }
     private func parts(_ task:URLSessionTask)->(id:String,kind:Int64,path:String){let p=(task.taskDescription ?? "").split(separator:"\0",omittingEmptySubsequences:false);return p.count==3 ? (String(p[0]),Int64(p[1]) ?? 1,String(p[2])):("",1,"")}
     private func save(id:String,kind:Int64,state:Int64,transferred:Int64,total:Int64,message:String){guard !id.isEmpty else{return};lock.lock();defer{lock.unlock()};let p="dev.pam.transfer.\(id).";guard TransferPhase.allows(current: defaults.object(forKey: p+"state") as? Int, next: state) else { return };defaults.set(kind,forKey:p+"kind");defaults.set(state,forKey:p+"state");defaults.set(transferred,forKey:p+"transferred");defaults.set(total,forKey:p+"total");defaults.set(message,forKey:p+"message")}
     private func details(id:String)->(kind:Int64,transferred:Int64,total:Int64)?{guard let s=snapshot(id:id), case let .integer(kind)?=s["kind"],case let .integer(transferred)?=s["bytesTransferred"],case let .integer(total)?=s["bytesTotal"] else{return nil};return(kind,transferred,total)}
