@@ -15,3 +15,23 @@ enum TransferHttpResult {
         return (3, "")
     }
 }
+
+// Terminal results are immutable: late progress/completion cannot revive a task.
+enum TransferPhase: Int64, CaseIterable {
+    case queued = 1
+    case running = 2
+    case completed = 3
+    case failed = 4
+    case cancelled = 5
+
+    static func allows(current: Int?, next: Int64) -> Bool {
+        guard let next = Self(rawValue: next) else { return false }
+        guard let current else { return next == .queued }
+        guard let current = Self(rawValue: Int64(current)) else { return false }
+        switch current {
+        case .queued: return next != .queued
+        case .running: return next != .queued
+        case .completed, .failed, .cancelled: return false
+        }
+    }
+}

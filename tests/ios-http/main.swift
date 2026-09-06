@@ -28,3 +28,15 @@ for invalid in ["[]", "{\"Host\":\"other.test\"}", "{\"Content-Length\":\"10\"}"
     } catch { }
 }
 print("PASS signed transfer headers")
+
+for terminal in [TransferPhase.completed, .failed, .cancelled] {
+    for next in TransferPhase.allCases {
+        precondition(!TransferPhase.allows(current: Int(terminal.rawValue), next: next.rawValue))
+    }
+}
+precondition(TransferPhase.allows(current: nil, next: TransferPhase.queued.rawValue))
+precondition(!TransferPhase.allows(current: nil, next: TransferPhase.running.rawValue))
+precondition(TransferPhase.allows(current: Int(TransferPhase.queued.rawValue), next: TransferPhase.cancelled.rawValue))
+precondition(TransferPhase.allows(current: Int(TransferPhase.running.rawValue), next: TransferPhase.completed.rawValue))
+precondition(!TransferPhase.allows(current: 99, next: TransferPhase.running.rawValue))
+print("PASS terminal transfer state precedence")
