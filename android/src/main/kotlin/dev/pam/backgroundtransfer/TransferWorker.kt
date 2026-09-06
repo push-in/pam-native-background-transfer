@@ -11,13 +11,17 @@ import java.net.URI
 class TransferWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
     override fun doWork(): Result {
         val kind = inputData.getInt(KIND, 1)
-        return runCatching {
+        return try {
             require(kind == 1 || kind == 2) { "Invalid transfer kind" }
-            if (kind == 1) download() else upload()
+            val result = if (kind == 1) download() else upload()
+            Result.success(progress(kind, result.first, result.second))
+        } catch (error: Exception) {
+            if (TransferRetry.shouldRetry(error, runAttemptCount, isStopped)) {
+                Result.retry()
+            } else {
+                Result.failure(progress(kind, 0, 0, "Transfer failed"))
+            }
         }
-            .fold({ Result.success(progress(kind, it.first, it.second)) }, { _ ->
-                if (runAttemptCount < 3) Result.retry() else Result.failure(progress(kind, 0, 0, "Transfer failed"))
-            })
     }
 
     private fun download(): Pair<Long, Long> {
@@ -25,7 +29,7 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Worker(co
         destination.parentFile?.mkdirs()
         val connection = connection("GET")
         try {
-            require(connection.responseCode in 200..299) { "Download did not receive a successful HTTP response" }
+            TransferRetry.requireSuccess(connection.responseCode)
             val expected = connection.contentLengthLong
             val total = expected.coerceAtLeast(0)
             val transferred = connection.inputStream.use { input ->
@@ -62,7 +66,7 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Worker(co
                     }
                 }
             }
-            require(connection.responseCode in 200..299) { "Upload did not receive a successful HTTP response" }
+            TransferRetry.requireSuccess(connection.responseCode)
             return total to total
         } finally {
             connection.disconnect()
