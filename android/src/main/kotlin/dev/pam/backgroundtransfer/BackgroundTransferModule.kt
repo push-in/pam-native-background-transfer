@@ -20,9 +20,17 @@ class BackgroundTransferModule(context: Context) : NativeModule {
     override fun invoke(method: String, payload: ByteArray, completion: ModuleCompletion) {
         runCatching {
             val values = WireMap.decode(payload)
+            if (method == "status") {
+                val identifier = values.text("identifier")
+                val pending = workManager.getWorkInfoById(UUID.fromString(identifier))
+                pending.addListener({
+                    val result = runCatching { snapshot(identifier, pending.get()) }
+                    result.onSuccess { completion.success(it) }.onFailure { completion.failure() }
+                }, java.util.concurrent.Executor { it.run() })
+                return
+            }
             when (method) {
                 "enqueue" -> enqueue(values)
-                "status" -> status(values.text("identifier"))
                 "cancel" -> cancel(values.text("identifier"))
                 else -> error("Unknown method: $method")
             }
@@ -52,9 +60,8 @@ class BackgroundTransferModule(context: Context) : NativeModule {
         return mapOf("identifier" to WireValue.Text(request.id.toString()))
     }
 
-    private fun status(identifier: String): Map<String, WireValue> {
-        val info = workManager.getWorkInfoById(UUID.fromString(identifier)).get()
-            ?: return mapOf("state" to WireValue.Integer(4), "message" to WireValue.Text("Transfer not found"))
+    private fun snapshot(identifier: String, info: WorkInfo?): Map<String, WireValue> {
+        requireNotNull(info) { "Transfer not found" }
         val output = if (info.state == WorkInfo.State.RUNNING) info.progress else info.outputData
         return mapOf(
             "identifier" to WireValue.Text(identifier),
