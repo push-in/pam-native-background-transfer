@@ -32,7 +32,7 @@ $transfers->download('https://cdn.example.com/movie.mp4', 'media/movie.mp4', fun
 
 Transfers require HTTPS. Paths are always resolved inside the application sandbox and traversal is rejected natively. State, kind and network requirements are sequential integer-backed enums. Android retries transient failures up to three times and honors connected, unmetered, or not-roaming constraints.
 
-Platform support: Android API 26+, iOS 15+, PAM Native 0.6.x.
+Platform minimums: Android API 26+ and iOS 15+. Composer declares PAM Native 0.8–1.x compatibility; the current branch is compiled against PAM Native 1.0.19.
 
 
 ## What installation does
@@ -40,6 +40,33 @@ Platform support: Android API 26+, iOS 15+, PAM Native 0.6.x.
 `pam add background-transfer` resolves the official compatible package, performs a non-mutating Composer preflight, updates the normal `composer.json` and `composer.lock`, refreshes generated native integration when required, and leaves the project ready for `pam doctor` validation.
 
 Use `pam packages` to inspect availability and `pam remove background-transfer` to uninstall the capability safely. Direct Composer commands are an advanced interoperability path; PAM is the supported application workflow.
+
+## Signed uploads (unreleased)
+
+The optional `headers` argument is available in this development branch. Use it only with a native host built with the matching plugin version; an older native module does not implement this wire field.
+
+```php
+$transfers->upload(
+    url: $grant['url'],
+    source: 'documents/selected.png',
+    complete: function (?string $id, ?string $error): void {
+        if ($error !== null) {
+            // Show a retry action; no valid transfer identifier was returned.
+            return;
+        }
+        // Persist $id and query status after resume or relaunch.
+    },
+    headers: $grant['headers'],
+);
+```
+
+The source is an existing file inside the application sandbox. Header values are strings, with at most 32 headers and four KiB of JSON. Names are case-insensitively unique; control characters and transport-managed headers (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `Trailer`, `Upgrade`) are rejected. Android preserves headers with the queued work; iOS includes them in the background URLSession request.
+
+Do not change the source while uploading. Obtain a fresh signed grant when an earlier one expires. A successful transfer means the HTTP upload completed; ask your authenticated backend to verify and confirm the received file before presenting it as an accepted document.
+
+Android download replacement is atomic after completion. HTTP errors are failures on both platforms. PHP returns `null` for malformed/unavailable status replies; callers must handle this explicitly. Android transfer operations acknowledge WorkManager completion asynchronously.
+
+Validation of this branch includes PHP contracts, Android compilation/JVM file tests, and Swift policy tests/module compilation. Physical lifecycle, HTTPS redirects, and real signed uploads remain release gates. This section does not claim a published release is ready for production.
 
 ## API guide
 
@@ -69,7 +96,7 @@ All coded states, kinds, and variants are sequential integer-backed enums. Use e
 
 ## Compatibility and support
 
-This package targets PAM Native `0.6.x`, Android API 26+, and iOS 15+ unless a platform-specific section above states a stricter requirement. Platform SDKs, credentials, entitlements, physical hardware, and store configuration remain application responsibilities.
+Use the Composer and plugin manifests for declared PAM Native compatibility. Android API 26+ and iOS 15+ are the platform minimums. Platform SDKs, credentials, entitlements, physical hardware, and store configuration remain application responsibilities.
 
 - [PAM documentation](https://push-in.github.io/pam-docs/introduction/)
 - [PAM Native overview](https://push-in.github.io/pam-docs/native/overview/)
