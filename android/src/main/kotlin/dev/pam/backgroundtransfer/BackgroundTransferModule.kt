@@ -30,14 +30,14 @@ class BackgroundTransferModule(context: Context) : NativeModule {
                 return
             }
             when (method) {
-                "enqueue" -> enqueue(values)
-                "cancel" -> cancel(values.text("identifier"))
+                "enqueue" -> enqueue(values, completion)
+                "cancel" -> cancel(values.text("identifier"), completion)
                 else -> error("Unknown method: $method")
             }
-        }.onSuccess { completion.success(it) }.onFailure { completion.failure() }
+        }.onFailure { completion.failure() }
     }
 
-    private fun enqueue(values: Map<String, WireValue>): Map<String, WireValue> {
+    private fun enqueue(values: Map<String, WireValue>, completion: ModuleCompletion) {
         val kind = values.integer("kind")
         require(kind == 1L || kind == 2L) { "Invalid transfer kind" }
         val networkCode = values.integer("network")
@@ -56,8 +56,12 @@ class BackgroundTransferModule(context: Context) : NativeModule {
                     .putString(TransferWorker.PATH, values.text("path"))
                     .build(),
             ).addTag(TAG).addTag(TransferIdentity.tag(kind.toInt())).build()
-        workManager.enqueue(request)
-        return mapOf("identifier" to WireValue.Text(request.id.toString()))
+        val pending = workManager.enqueue(request).result
+        pending.addListener({
+            val result = runCatching { pending.get() }
+            result.onSuccess { completion.success(mapOf("identifier" to WireValue.Text(request.id.toString()))) }
+                .onFailure { completion.failure() }
+        }, java.util.concurrent.Executor { it.run() })
     }
 
     private fun snapshot(identifier: String, info: WorkInfo?): Map<String, WireValue> {
@@ -73,9 +77,12 @@ class BackgroundTransferModule(context: Context) : NativeModule {
         )
     }
 
-    private fun cancel(identifier: String): Map<String, WireValue> {
-        workManager.cancelWorkById(UUID.fromString(identifier))
-        return emptyMap()
+    private fun cancel(identifier: String, completion: ModuleCompletion) {
+        val pending = workManager.cancelWorkById(UUID.fromString(identifier)).result
+        pending.addListener({
+            val result = runCatching { pending.get() }
+            result.onSuccess { completion.success(emptyMap()) }.onFailure { completion.failure() }
+        }, java.util.concurrent.Executor { it.run() })
     }
 
     private fun WorkInfo.State.toTransferState(): Long = when (this) {
