@@ -11,7 +11,13 @@ public final class BackgroundTransferModule: NativeModule, @unchecked Sendable {
             switch method {
             case "enqueue":
                 guard case let .integer(kind)?=values["kind"], case let .text(urlText)?=values["url"], case let .text(path)?=values["path"], let url=URL(string:urlText), url.scheme=="https", (kind == 1 || kind == 2) else { throw TransferError.invalidRequest }
-                let id = try coordinator.enqueue(kind:kind,url:url,path:path)
+                let encodedHeaders: String
+                if let value = values["headers"] {
+                    guard case let .text(text) = value else { throw TransferError.invalidRequest }
+                    encodedHeaders = text
+                } else { encodedHeaders = "{}" }
+                let headers = try TransferHeaders.decode(encodedHeaders)
+                let id = try coordinator.enqueue(kind:kind,url:url,path:path,headers:headers)
                 succeed(["identifier":.text(id)],completion)
             case "status":
                 guard case let .text(id)?=values["identifier"] else { throw TransferError.invalidRequest }
@@ -29,7 +35,7 @@ public final class BackgroundTransferModule: NativeModule, @unchecked Sendable {
 private final class TransferCoordinator:NSObject,URLSessionDownloadDelegate,URLSessionTaskDelegate,@unchecked Sendable {
     static let shared=TransferCoordinator(); private let defaults=UserDefaults.standard; private let lock=NSLock()
     private lazy var session:URLSession={let config=URLSessionConfiguration.background(withIdentifier:"dev.pam.background-transfer.v1");config.sessionSendsLaunchEvents=true;config.isDiscretionary=false;return URLSession(configuration:config,delegate:self,delegateQueue:nil)}()
-    func enqueue(kind:Int64,url:URL,path:String)throws->String{let target=try safeURL(path);let id=UUID().uuidString;let metadata="\(id)\u{0}\(kind)\u{0}\(target.path)";let task:URLSessionTask;if kind==1{task=session.downloadTask(with:url)}else{var request=URLRequest(url:url);request.httpMethod="PUT";task=session.uploadTask(with:request,fromFile:target)};task.taskDescription=metadata;save(id:id,kind:kind,state:1,transferred:0,total:0,message:"");task.resume();return id}
+    func enqueue(kind:Int64,url:URL,path:String,headers:[String:String])throws->String{let target=try safeURL(path);let id=UUID().uuidString;let metadata="\(id)\u{0}\(kind)\u{0}\(target.path)";let task:URLSessionTask;if kind==1{task=session.downloadTask(with:TransferHeaders.request(url:url,method:"GET",headers:headers))}else{let request=TransferHeaders.request(url:url,method:"PUT",headers:headers);task=session.uploadTask(with:request,fromFile:target)};task.taskDescription=metadata;save(id:id,kind:kind,state:1,transferred:0,total:0,message:"");task.resume();return id}
     func snapshot(id:String)->[String:WireValue]{lock.lock();defer{lock.unlock()};let p="dev.pam.transfer.\(id).";guard defaults.object(forKey:p+"state") != nil else{return ["identifier":.text(id),"kind":.integer(1),"state":.integer(4),"bytesTransferred":.integer(0),"bytesTotal":.integer(0),"message":.text("Transfer not found")]};return ["identifier":.text(id),"kind":.integer(Int64(defaults.integer(forKey:p+"kind"))),"state":.integer(Int64(defaults.integer(forKey:p+"state"))),"bytesTransferred":.integer(Int64(defaults.integer(forKey:p+"transferred"))),"bytesTotal":.integer(Int64(defaults.integer(forKey:p+"total"))),"message":.text(defaults.string(forKey:p+"message") ?? "")]}
     func cancel(id:String){session.getAllTasks{tasks in tasks.filter{self.parts($0).id==id}.forEach{$0.cancel()};if let s=self.details(id:id){self.save(id:id,kind:s.kind,state:5,transferred:s.transferred,total:s.total,message:"Cancelled")}}}
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {

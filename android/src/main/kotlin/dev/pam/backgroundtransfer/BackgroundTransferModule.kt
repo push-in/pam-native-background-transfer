@@ -47,6 +47,12 @@ class BackgroundTransferModule(context: Context) : NativeModule {
             3L -> NetworkType.NOT_ROAMING
             else -> NetworkType.CONNECTED
         }
+        val headers = when (val value = values["headers"]) {
+            null -> "{}"
+            is WireValue.Text -> value.value
+            else -> error("Invalid transfer headers")
+        }
+        TransferHeaders.decode(headers)
         val request = OneTimeWorkRequestBuilder<TransferWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
             .setInputData(
@@ -54,6 +60,7 @@ class BackgroundTransferModule(context: Context) : NativeModule {
                     .putInt(TransferWorker.KIND, kind.toInt())
                     .putString(TransferWorker.URL, values.text("url"))
                     .putString(TransferWorker.PATH, values.text("path"))
+                    .putString(TransferWorker.HEADERS, headers)
                     .build(),
             ).addTag(TAG).addTag(TransferIdentity.tag(kind.toInt())).build()
         val pending = workManager.enqueue(request).result

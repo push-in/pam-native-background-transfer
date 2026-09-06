@@ -72,14 +72,16 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Worker(co
     private fun connection(method: String): HttpURLConnection {
         val uri = URI(inputData.getString(URL) ?: error("url is required"))
         require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null) { "Transfers require an HTTPS URL" }
+        val headers = TransferHeaders.decode(inputData.getString(HEADERS) ?: "{}")
         return (uri.toURL().openConnection() as HttpURLConnection).apply {
             requestMethod = method
             connectTimeout = 30_000
             readTimeout = 60_000
             instanceFollowRedirects = false
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
         }
     }
     private fun safeFile(path:String):File{val root=applicationContext.filesDir.canonicalFile;val file=File(root,path).canonicalFile;require(file.path.startsWith(root.path+File.separator)){"Path escapes app files"};return file}
     private fun progress(kind:Int,transferred:Long,total:Long,message:String?=null)=Data.Builder().putInt(KIND,kind).putLong(TRANSFERRED,transferred).putLong(TOTAL,total).apply{message?.let{putString(MESSAGE,it)}}.build()
-    companion object { const val KIND="kind";const val URL="url";const val PATH="path";const val TRANSFERRED="transferred";const val TOTAL="total";const val MESSAGE="message" }
+    companion object { const val HEADERS="headers"; const val KIND="kind";const val URL="url";const val PATH="path";const val TRANSFERRED="transferred";const val TOTAL="total";const val MESSAGE="message" }
 }

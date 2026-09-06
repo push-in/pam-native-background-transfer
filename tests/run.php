@@ -31,4 +31,18 @@ $test('empty enqueue reply is a failure', static function (): void {
     if (!$called) throw new RuntimeException('Missing callback');
     NativeTestHarness::uninstall();
 });
+$test('validates signed upload headers before enqueue', static function (): void {
+    $fake = NativeTestHarness::install();
+    $fake->succeed('background-transfer', 'enqueue', ['identifier' => 'upload-id']);
+    (new BackgroundTransfer())->upload('https://example.test/put', 'document.png', static function (): void {}, headers: ['Content-Type' => 'image/png', 'x-amz-acl' => 'private']);
+    $payload = Wire::decodeMap($fake->lastCall()->payload);
+    if (json_decode($payload['headers'], true) !== ['Content-Type' => 'image/png', 'x-amz-acl' => 'private']) throw new RuntimeException('Headers were not preserved');
+    NativeTestHarness::uninstall();
+    foreach ([['Host' => 'other.test'], ['Content-Length' => '10'], ['X-Test' => "unsafe\r\nheader"], ['X-Test' => 'a', 'x-test' => 'b'], ['X-Test' => str_repeat('x', 4097)]] as $invalid) {
+        try {
+            \Pam\Native\BackgroundTransfer\TransferHeaders::encode($invalid);
+            throw new RuntimeException('Invalid headers accepted');
+        } catch (InvalidArgumentException) {}
+    }
+});
 $failed=0;foreach($tests as $name=>$run){try{$run();fwrite(STDOUT,"PASS $name\n");}catch(Throwable $e){$failed++;fwrite(STDERR,"FAIL $name: {$e->getMessage()}\n");}}fwrite(STDOUT,count($tests)." tests, $failed failures\n");exit($failed?1:0);

@@ -15,3 +15,16 @@ precondition(TransferHttpResult.completion(response: response(200), error: nil, 
 precondition(TransferHttpResult.completion(response: response(200), error: URLError(.cancelled), failedToSave: false).state == 5)
 precondition(TransferHttpResult.completion(response: response(200), error: URLError(.timedOut), failedToSave: false).state == 4)
 print("PASS transfer HTTP completion contracts")
+
+let signedHeaders = try TransferHeaders.decode("{\"Content-Type\":\"image/png\",\"x-amz-acl\":\"private\"}")
+let uploadRequest = TransferHeaders.request(url: url, method: "PUT", headers: signedHeaders)
+precondition(uploadRequest.httpMethod == "PUT")
+precondition(uploadRequest.value(forHTTPHeaderField: "Content-Type") == "image/png")
+precondition(uploadRequest.value(forHTTPHeaderField: "x-amz-acl") == "private")
+for invalid in ["[]", "{\"Host\":\"other.test\"}", "{\"Content-Length\":\"10\"}", "{\"X-Test\":1}", "{\"X-Test\":\"a\",\"x-test\":\"b\"}", "{\"X-Test\":\"a\\r\\nInjected: b\"}"] {
+    do {
+        _ = try TransferHeaders.decode(invalid)
+        fatalError("Invalid headers accepted")
+    } catch { }
+}
+print("PASS signed transfer headers")
