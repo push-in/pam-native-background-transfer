@@ -1,0 +1,13 @@
+name: iOS transfer HTTP contracts
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test HTTP results and persistence failure precedence
+        run: |
+          swiftc ios/Sources/TransferHttpResult.swift tests/ios-http/main.swift -o /tmp/transfer-http-tests
+          /tmp/transfer-http-tests
