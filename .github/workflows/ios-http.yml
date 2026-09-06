@@ -1,0 +1,60 @@
+name: iOS transfer contracts
+
+on:
+  pull_request:
+  push:
+    branches: [main, fix/transfer-http-results]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: plugin
+      - uses: actions/checkout@v7
+        with:
+          repository: push-in/pam-native
+          ref: v1.0.19
+          path: sdk
+      - name: Test HTTP results and persistence failure precedence
+        run: |
+          swiftc -swift-version 5 plugin/ios/Sources/TransferHttpResult.swift plugin/ios/Sources/TransferHeaders.swift plugin/tests/ios-http/main.swift -o "$RUNNER_TEMP/transfer-http-tests"
+          "$RUNNER_TEMP/transfer-http-tests"
+      - name: Prepare isolated transfer package
+        run: |
+          mkdir -p certification/Sources/PamTransfer
+          cp plugin/ios/Sources/*.swift certification/Sources/PamTransfer/
+          cp -R sdk/ios/Sources/PamNativeTestRuntimeShims certification/Sources/RuntimeShims
+          cat > certification/Package.swift <<'SWIFT'
+          // swift-tools-version: 5.9
+          import PackageDescription
+          let package = Package(
+              name: "PamTransfer",
+              platforms: [.iOS(.v15)],
+              products: [.library(name: "PamTransfer", targets: ["PamTransfer"])],
+              dependencies: [.package(path: "../sdk/ios")],
+              targets: [
+                  .target(name: "PamTransfer", dependencies: [
+                      .product(name: "PamNative", package: "ios"), "RuntimeShims"
+                  ], linkerSettings: []),
+                  .target(name: "RuntimeShims", publicHeadersPath: "include")
+              ],
+              swiftLanguageVersions: [.v5]
+          )
+          SWIFT
+      - name: Compile transfer against published SDK
+        working-directory: certification
+        run: >-
+          xcodebuild -scheme PamTransfer -configuration Release
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath "$RUNNER_TEMP/TransferBuild"
+          CODE_SIGNING_ALLOWED=NO build
+      - name: Remove generated build outputs
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/TransferBuild"

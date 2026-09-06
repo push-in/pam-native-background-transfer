@@ -9,4 +9,40 @@ $tests=[];$test=static function(string $n,Closure $f)use(&$tests):void{$tests[$n
 $test('enqueues typed durable download',static function():void{$fake=NativeTestHarness::install();$fake->succeed('background-transfer','enqueue',['identifier'=>'550e8400-e29b-41d4-a716-446655440000']);$id=null;(new BackgroundTransfer())->download('https://cdn.example.test/video.mp4','media/video.mp4',static function(?string $value)use(&$id):void{$id=$value;});if($id!=='550e8400-e29b-41d4-a716-446655440000')throw new RuntimeException('identifier mismatch');$call=$fake->lastCall();$payload=$call?Wire::decodeMap($call->payload):[];if(($payload['kind']??null)!==1||($payload['network']??null)!==1)throw new RuntimeException('integer enum contract mismatch');$fake->assertSatisfied();NativeTestHarness::uninstall();});
 $test('maps native status',static function():void{$fake=NativeTestHarness::install();$fake->succeed('background-transfer','status',['identifier'=>'id','kind'=>2,'state'=>2,'bytesTransferred'=>512,'bytesTotal'=>1024]);$snapshot=null;(new BackgroundTransfer())->status('id',static function($v)use(&$snapshot):void{$snapshot=$v;});if($snapshot?->state!==TransferState::Running||$snapshot->bytesTransferred!==512)throw new RuntimeException('snapshot mismatch');NativeTestHarness::uninstall();});
 $test('rejects insecure URLs before bridge',static function():void{try{(new BackgroundTransfer())->download('http://example.test/a','a',static function():void{});throw new RuntimeException('accepted HTTP');}catch(InvalidArgumentException){}});
+$test('rejects malformed native snapshots', static function (): void {
+    $valid = ['identifier' => 'id', 'kind' => 2, 'state' => 2, 'bytesTransferred' => 1, 'bytesTotal' => 10];
+    foreach ([['identifier' => 'other'], ['kind' => 99], ['state' => '2'], ['bytesTransferred' => -1], ['bytesTotal' => -2], ['message' => false]] as $change) {
+        $fake = NativeTestHarness::install();
+        $fake->succeed('background-transfer', 'status', array_replace($valid, $change));
+        $snapshot = 'unset';
+        (new BackgroundTransfer())->status('id', static function ($value) use (&$snapshot): void { $snapshot = $value; });
+        if ($snapshot !== null) throw new RuntimeException('Malformed native snapshot accepted');
+        NativeTestHarness::uninstall();
+    }
+});
+$test('empty enqueue reply is a failure', static function (): void {
+    $fake = NativeTestHarness::install();
+    $fake->succeed('background-transfer', 'enqueue', []);
+    $called = false;
+    (new BackgroundTransfer())->upload('https://example.test/upload', 'document.jpg', static function ($id, $error) use (&$called): void {
+        $called = true;
+        if ($id !== null || !is_string($error) || $error === '') throw new RuntimeException('Missing identifier reported as success');
+    });
+    if (!$called) throw new RuntimeException('Missing callback');
+    NativeTestHarness::uninstall();
+});
+$test('validates signed upload headers before enqueue', static function (): void {
+    $fake = NativeTestHarness::install();
+    $fake->succeed('background-transfer', 'enqueue', ['identifier' => 'upload-id']);
+    (new BackgroundTransfer())->upload('https://example.test/put', 'document.png', static function (): void {}, headers: ['Content-Type' => 'image/png', 'x-amz-acl' => 'private']);
+    $payload = Wire::decodeMap($fake->lastCall()->payload);
+    if (json_decode($payload['headers'], true) !== ['Content-Type' => 'image/png', 'x-amz-acl' => 'private']) throw new RuntimeException('Headers were not preserved');
+    NativeTestHarness::uninstall();
+    foreach ([['Host' => 'other.test'], ['Content-Length' => '10'], ['X-Test' => "unsafe\r\nheader"], ['X-Test' => 'a', 'x-test' => 'b'], ['X-Test' => str_repeat('x', 4097)]] as $invalid) {
+        try {
+            \Pam\Native\BackgroundTransfer\TransferHeaders::encode($invalid);
+            throw new RuntimeException('Invalid headers accepted');
+        } catch (InvalidArgumentException) {}
+    }
+});
 $failed=0;foreach($tests as $name=>$run){try{$run();fwrite(STDOUT,"PASS $name\n");}catch(Throwable $e){$failed++;fwrite(STDERR,"FAIL $name: {$e->getMessage()}\n");}}fwrite(STDOUT,count($tests)." tests, $failed failures\n");exit($failed?1:0);

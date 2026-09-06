@@ -20,41 +20,63 @@ class BackgroundTransferModule(context: Context) : NativeModule {
     override fun invoke(method: String, payload: ByteArray, completion: ModuleCompletion) {
         runCatching {
             val values = WireMap.decode(payload)
+            if (method == "status") {
+                val identifier = values.text("identifier")
+                val pending = workManager.getWorkInfoById(UUID.fromString(identifier))
+                pending.addListener({
+                    val result = runCatching { snapshot(identifier, pending.get()) }
+                    result.onSuccess { completion.success(it) }.onFailure { completion.failure() }
+                }, java.util.concurrent.Executor { it.run() })
+                return
+            }
             when (method) {
-                "enqueue" -> enqueue(values)
-                "status" -> status(values.text("identifier"))
-                "cancel" -> cancel(values.text("identifier"))
+                "enqueue" -> enqueue(values, completion)
+                "cancel" -> cancel(values.text("identifier"), completion)
                 else -> error("Unknown method: $method")
             }
-        }.onSuccess { completion.success(it) }.onFailure { completion.failure(it) }
+        }.onFailure { completion.failure() }
     }
 
-    private fun enqueue(values: Map<String, WireValue>): Map<String, WireValue> {
-        val network = when (values.integer("network")) {
+    private fun enqueue(values: Map<String, WireValue>, completion: ModuleCompletion) {
+        val kind = values.integer("kind")
+        require(kind == 1L || kind == 2L) { "Invalid transfer kind" }
+        val networkCode = values.integer("network")
+        require(networkCode in 1L..3L) { "Invalid network requirement" }
+        val network = when (networkCode) {
             2L -> NetworkType.UNMETERED
             3L -> NetworkType.NOT_ROAMING
             else -> NetworkType.CONNECTED
         }
+        val headers = when (val value = values["headers"]) {
+            null -> "{}"
+            is WireValue.Text -> value.value
+            else -> error("Invalid transfer headers")
+        }
+        TransferHeaders.decode(headers)
         val request = OneTimeWorkRequestBuilder<TransferWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
             .setInputData(
                 Data.Builder()
-                    .putInt(TransferWorker.KIND, values.integer("kind").toInt())
+                    .putInt(TransferWorker.KIND, kind.toInt())
                     .putString(TransferWorker.URL, values.text("url"))
                     .putString(TransferWorker.PATH, values.text("path"))
+                    .putString(TransferWorker.HEADERS, headers)
                     .build(),
-            ).addTag(TAG).build()
-        workManager.enqueue(request)
-        return mapOf("identifier" to WireValue.Text(request.id.toString()))
+            ).addTag(TAG).addTag(TransferIdentity.tag(kind.toInt())).build()
+        val pending = workManager.enqueue(request).result
+        pending.addListener({
+            val result = runCatching { pending.get() }
+            result.onSuccess { completion.success(mapOf("identifier" to WireValue.Text(request.id.toString()))) }
+                .onFailure { completion.failure() }
+        }, java.util.concurrent.Executor { it.run() })
     }
 
-    private fun status(identifier: String): Map<String, WireValue> {
-        val info = workManager.getWorkInfoById(UUID.fromString(identifier)).get()
-            ?: return mapOf("state" to WireValue.Integer(4), "message" to WireValue.Text("Transfer not found"))
+    private fun snapshot(identifier: String, info: WorkInfo?): Map<String, WireValue> {
+        requireNotNull(info) { "Transfer not found" }
         val output = if (info.state == WorkInfo.State.RUNNING) info.progress else info.outputData
         return mapOf(
             "identifier" to WireValue.Text(identifier),
-            "kind" to WireValue.Integer(output.getInt(TransferWorker.KIND, 1).toLong()),
+            "kind" to WireValue.Integer(TransferIdentity.kind(info.tags, output.getInt(TransferWorker.KIND, 0)).toLong()),
             "state" to WireValue.Integer(info.state.toTransferState()),
             "bytesTransferred" to WireValue.Integer(output.getLong(TransferWorker.TRANSFERRED, 0)),
             "bytesTotal" to WireValue.Integer(output.getLong(TransferWorker.TOTAL, 0)),
@@ -62,9 +84,12 @@ class BackgroundTransferModule(context: Context) : NativeModule {
         )
     }
 
-    private fun cancel(identifier: String): Map<String, WireValue> {
-        workManager.cancelWorkById(UUID.fromString(identifier))
-        return emptyMap()
+    private fun cancel(identifier: String, completion: ModuleCompletion) {
+        val pending = workManager.cancelWorkById(UUID.fromString(identifier)).result
+        pending.addListener({
+            val result = runCatching { pending.get() }
+            result.onSuccess { completion.success(emptyMap()) }.onFailure { completion.failure() }
+        }, java.util.concurrent.Executor { it.run() })
     }
 
     private fun WorkInfo.State.toTransferState(): Long = when (this) {
@@ -77,6 +102,6 @@ class BackgroundTransferModule(context: Context) : NativeModule {
     private fun Map<String, WireValue>.text(key: String)=(get(key) as? WireValue.Text)?.value?:error("$key is required")
     private fun Map<String, WireValue>.integer(key: String)=(get(key) as? WireValue.Integer)?.value?:error("$key is required")
     private fun ModuleCompletion.success(values:Map<String,WireValue>)=complete(ModuleResultStatus.SUCCESS,WireMap.encode(values))
-    private fun ModuleCompletion.failure(error:Throwable)=complete(ModuleResultStatus.FAILURE,(error.message?:"Background transfer failure").toByteArray())
+    private fun ModuleCompletion.failure()=complete(ModuleResultStatus.FAILURE,"Background transfer failure".toByteArray())
     private companion object { const val TAG="dev.pam.background-transfer" }
 }
