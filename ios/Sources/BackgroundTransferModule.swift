@@ -10,7 +10,7 @@ public final class BackgroundTransferModule: NativeModule, @unchecked Sendable {
             let values = try WireMap.decode(payload)
             switch method {
             case "enqueue":
-                guard case let .integer(kind)?=values["kind"], case let .text(urlText)?=values["url"], case let .text(path)?=values["path"], let url=URL(string:urlText), url.scheme=="https" else { throw TransferError.invalidRequest }
+                guard case let .integer(kind)?=values["kind"], case let .text(urlText)?=values["url"], case let .text(path)?=values["path"], let url=URL(string:urlText), url.scheme=="https", (kind == 1 || kind == 2) else { throw TransferError.invalidRequest }
                 let id = try coordinator.enqueue(kind:kind,url:url,path:path)
                 succeed(["identifier":.text(id)],completion)
             case "status":
@@ -21,9 +21,9 @@ public final class BackgroundTransferModule: NativeModule, @unchecked Sendable {
                 coordinator.cancel(id:id); succeed([:],completion)
             default: throw TransferError.invalidRequest
             }
-        } catch { completion(.failure,Data(String(describing:error).utf8)) }
+        } catch { completion(.failure,Data("Background transfer failure".utf8)) }
     }
-    private func succeed(_ values:[String:WireValue],_ completion:ModuleCompletion){do{completion(.success,try WireMap.encode(values))}catch{completion(.failure,Data(String(describing:error).utf8))}}
+    private func succeed(_ values:[String:WireValue],_ completion:ModuleCompletion){do{completion(.success,try WireMap.encode(values))}catch{completion(.failure,Data("Background transfer failure".utf8))}}
 }
 
 private final class TransferCoordinator:NSObject,URLSessionDownloadDelegate,URLSessionTaskDelegate,@unchecked Sendable {

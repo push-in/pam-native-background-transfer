@@ -26,11 +26,15 @@ class BackgroundTransferModule(context: Context) : NativeModule {
                 "cancel" -> cancel(values.text("identifier"))
                 else -> error("Unknown method: $method")
             }
-        }.onSuccess { completion.success(it) }.onFailure { completion.failure(it) }
+        }.onSuccess { completion.success(it) }.onFailure { completion.failure() }
     }
 
     private fun enqueue(values: Map<String, WireValue>): Map<String, WireValue> {
-        val network = when (values.integer("network")) {
+        val kind = values.integer("kind")
+        require(kind == 1L || kind == 2L) { "Invalid transfer kind" }
+        val networkCode = values.integer("network")
+        require(networkCode in 1L..3L) { "Invalid network requirement" }
+        val network = when (networkCode) {
             2L -> NetworkType.UNMETERED
             3L -> NetworkType.NOT_ROAMING
             else -> NetworkType.CONNECTED
@@ -39,7 +43,7 @@ class BackgroundTransferModule(context: Context) : NativeModule {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(network).build())
             .setInputData(
                 Data.Builder()
-                    .putInt(TransferWorker.KIND, values.integer("kind").toInt())
+                    .putInt(TransferWorker.KIND, kind.toInt())
                     .putString(TransferWorker.URL, values.text("url"))
                     .putString(TransferWorker.PATH, values.text("path"))
                     .build(),
@@ -77,6 +81,6 @@ class BackgroundTransferModule(context: Context) : NativeModule {
     private fun Map<String, WireValue>.text(key: String)=(get(key) as? WireValue.Text)?.value?:error("$key is required")
     private fun Map<String, WireValue>.integer(key: String)=(get(key) as? WireValue.Integer)?.value?:error("$key is required")
     private fun ModuleCompletion.success(values:Map<String,WireValue>)=complete(ModuleResultStatus.SUCCESS,WireMap.encode(values))
-    private fun ModuleCompletion.failure(error:Throwable)=complete(ModuleResultStatus.FAILURE,(error.message?:"Background transfer failure").toByteArray())
+    private fun ModuleCompletion.failure()=complete(ModuleResultStatus.FAILURE,"Background transfer failure".toByteArray())
     private companion object { const val TAG="dev.pam.background-transfer" }
 }

@@ -11,9 +11,12 @@ import java.net.URI
 class TransferWorker(context: Context, parameters: WorkerParameters) : Worker(context, parameters) {
     override fun doWork(): Result {
         val kind = inputData.getInt(KIND, 1)
-        return runCatching { if (kind == 1) download() else upload() }
-            .fold({ Result.success(progress(kind, it.first, it.second)) }, { error ->
-                if (runAttemptCount < 3) Result.retry() else Result.failure(progress(kind, 0, 0, error.message))
+        return runCatching {
+            require(kind == 1 || kind == 2) { "Invalid transfer kind" }
+            if (kind == 1) download() else upload()
+        }
+            .fold({ Result.success(progress(kind, it.first, it.second)) }, { _ ->
+                if (runAttemptCount < 3) Result.retry() else Result.failure(progress(kind, 0, 0, "Transfer failed"))
             })
     }
 
