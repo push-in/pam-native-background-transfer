@@ -102,6 +102,8 @@ BackgroundTransfer::upload('https://api.example.com/media')
     ->dispatch();
 ```
 
+Pass `fallbackToOriginal: true` to send the original file when the device cannot re-encode it. A transfer holds up to 64 steps.
+
 ### Downloads, inspection and housekeeping
 
 ```php

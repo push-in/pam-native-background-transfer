@@ -42,7 +42,7 @@ final class PendingTransfer
 
     private ?string $unique = null;
 
-    /** @var null|array{preset: int, maxBitrate: int, fastStart: bool} */
+    /** @var null|array{preset: int, maxBitrate: int, fastStart: bool, fallback?: true} */
     private ?array $transcode = null;
 
     /** @internal */
@@ -218,13 +218,18 @@ final class PendingTransfer
     /**
      * Re-encodes every `video/*` file of the transfer before it is sent.
      * Requires `pushinbr/pam-native-media` 0.4+, which owns the codec stack.
+     * With `$fallbackToOriginal`, a file the device cannot transcode is sent
+     * unchanged instead of failing the transfer.
+     *
+     * @param null|int<100000, 50000000> $maxBitrate
      */
-    public function transcode(VideoPreset $preset, ?int $maxBitrate = null, bool $fastStart = true): self
+    public function transcode(VideoPreset $preset, ?int $maxBitrate = null, bool $fastStart = true, bool $fallbackToOriginal = false): self
     {
         if ($maxBitrate !== null && ($maxBitrate < 100_000 || $maxBitrate > 50_000_000)) {
             throw new InvalidArgumentException('Maximum bitrate must be between 100 kbps and 50 Mbps.');
         }
-        $this->transcode = ['preset' => $preset->value, 'maxBitrate' => $maxBitrate ?? 0, 'fastStart' => $fastStart];
+        $this->transcode = ['preset' => $preset->value, 'maxBitrate' => $maxBitrate ?? 0, 'fastStart' => $fastStart]
+            + ($fallbackToOriginal ? ['fallback' => true] : []);
 
         return $this;
     }
@@ -239,8 +244,8 @@ final class PendingTransfer
             throw new LogicException('A download needs a destination: call to($path).');
         }
         $steps = array_map(static fn (HttpStep $step): array => $step->toWire(), [...$this->before, $this->step, ...$this->after]);
-        if (count($steps) > 16) {
-            throw new LogicException('A transfer supports at most 16 steps.');
+        if (count($steps) > 64) {
+            throw new LogicException('A transfer supports at most 64 steps.');
         }
 
         return array_filter([

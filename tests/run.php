@@ -90,6 +90,18 @@ $test('supports signed URL flows with before steps and response headers', static
     $assert(!array_key_exists('retry', $wire['steps'][2]), 'steps are retryable by default');
     $once = HttpStep::post('https://api.example.test/imports')->json(['key' => '{{steps.sign.data.key}}'])->retryable(false)->toWire();
     $assert($once['retry'] === false, 'non-retryable step must be flagged on the wire');
+    $many = BackgroundTransfer::request(HttpStep::post('https://api.example.test/a'));
+    for ($index = 1; $index < 64; $index++) {
+        $many->then(HttpStep::post('https://api.example.test/a'));
+    }
+    $assert(count($many->toWire()['steps']) === 64, 'a transfer must accept 64 steps');
+    $rejected = false;
+    try {
+        $many->then(HttpStep::post('https://api.example.test/a'))->toWire();
+    } catch (LogicException) {
+        $rejected = true;
+    }
+    $assert($rejected, 'more than 64 steps must be rejected');
     NativeTestHarness::uninstall();
 });
 
@@ -198,6 +210,9 @@ $test('transcode step references the media preset contract', static function () 
         ->transcode(Pam\Native\Media\VideoPreset::Chat720p, maxBitrate: 1_200_000)
         ->dispatch();
     $assert($spec($fake)['transcode'] === ['preset' => Pam\Native\Media\VideoPreset::Chat720p->value, 'maxBitrate' => 1_200_000, 'fastStart' => true], 'transcode mismatch');
+    $fallback = BackgroundTransfer::upload('https://api.example.test/media')->put()->file('a.mov', 'video/mp4')
+        ->transcode(Pam\Native\Media\VideoPreset::Adaptive, fallbackToOriginal: true)->toWire();
+    $assert(($fallback['transcode']['fallback'] ?? false) === true, 'transcode fallback must travel on the wire');
     NativeTestHarness::uninstall();
 });
 

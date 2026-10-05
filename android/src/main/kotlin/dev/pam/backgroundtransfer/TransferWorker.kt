@@ -109,7 +109,7 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
         val http = TransferHttp(
             secrets = vault::get,
             files = { path, mime, filename ->
-                transcoded[path]?.let { output ->
+                transcoded[path]?.takeIf { it.isNotEmpty() }?.let { output ->
                     LocalFile(File(output), "video/mp4", filename.substringBeforeLast('.') + ".mp4")
                 } ?: LocalFile(TransferPaths.resolve(applicationContext, path, mustExist = true), mime, filename)
             },
@@ -157,25 +157,33 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
     private fun transcode(id: String, spec: TransferSpec, initial: TransferProgress): TransferProgress {
         val options = spec.transcode ?: return initial
         var progress = initial
-        val pending = spec.videoFiles().filter { path -> progress.transcoded[path]?.let { File(it).isFile } != true }
+        val pending = spec.videoFiles().filter { path -> progress.transcoded[path]?.let { it.isEmpty() || File(it).isFile } != true }
         if (pending.isEmpty()) return progress
         store.update(id) { it.copy(stage = TransferStages.TRANSCODING) }
         val directory = TransferPaths.workDirectory(applicationContext, id).apply { mkdirs() }
         pending.forEachIndexed { index, path ->
             val source = TransferPaths.resolve(applicationContext, path, mustExist = true)
             val output = File(directory, "transcoded-${progress.transcoded.size + 1}.mp4")
-            MediaTranscoderBridge.transcode(
-                applicationContext,
-                source,
-                output,
-                options,
-                cancelled = { isStopped },
-                progress = { fraction ->
-                    val overall = ((index + fraction.coerceIn(0.0, 1.0)) / pending.size * 1000).toLong()
-                    store.progress(id, overall, 1000)
-                },
-            )
-            progress = progress.copy(transcoded = progress.transcoded + (path to output.absolutePath))
+            val result = try {
+                MediaTranscoderBridge.transcode(
+                    applicationContext,
+                    source,
+                    output,
+                    options,
+                    cancelled = { isStopped },
+                    progress = { fraction ->
+                        val overall = ((index + fraction.coerceIn(0.0, 1.0)) / pending.size * 1000).toLong()
+                        store.progress(id, overall, 1000)
+                    },
+                )
+                output.absolutePath
+            } catch (error: TransferFailure) {
+                if (isStopped || !options.optBoolean("fallback", false)) throw error
+                // Fallback: an empty entry sends the original file and is never re-encoded on resume.
+                output.delete()
+                ""
+            }
+            progress = progress.copy(transcoded = progress.transcoded + (path to result))
             TransferFiles.writeProgress(applicationContext, id, progress)
         }
         return progress

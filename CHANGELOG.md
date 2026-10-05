@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.2 - 2026-10-05
+
+### Changed
+
+- A transfer accepts up to 64 steps (was 16), enough for signed-URL pipelines
+  of large carousels (one sign and one upload step per file plus the final
+  request).
+
+### Added
+
+- `transcode(..., fallbackToOriginal: true)` uploads the original file when the
+  device cannot re-encode a video, instead of failing the transfer; the
+  decision is checkpointed so resumes never re-attempt it.
+
 ## 0.3.1 - 2026-10-05
 
 ### Added

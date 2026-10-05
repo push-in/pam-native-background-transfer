@@ -27,7 +27,7 @@ internal data class TransferSpec(
     }.distinct()
 
     companion object {
-        const val MAX_STEPS = 16
+        const val MAX_STEPS = 64
 
         fun parse(json: String): TransferSpec {
             require(json.length <= 4 * 1024 * 1024) { "Transfer description is too large" }
