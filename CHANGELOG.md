@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.0 - 2026-10-05
+
+### Breaking
+
+- `BackgroundTransfer` is now a static, fluent facade. Replace
+  `(new BackgroundTransfer())->upload($url, $path, $done)` with
+  `BackgroundTransfer::upload($url)->put()->file($path)->dispatch($then)` and
+  `->download($url, $path, $done)` with
+  `BackgroundTransfer::download($url)->to($path)->dispatch($then)`.
+- Paths now resolve inside the PAM file sandbox (`filesDir/pam-files`, the same
+  space as `FileReference::$path`) instead of the raw application files root.
+- Requires PAM Native `>=1.0.35 <2.0.0`.
+
+### Added
+
+- Multipart (`multipart(fn (Multipart $m) => ...)`), raw file, JSON and form
+  bodies streamed natively with OkHttp and byte-accurate progress.
+- Request chains executed inside the Android worker, even while PHP is
+  suspended or the process was restarted: `before()` / `then()` steps with
+  `{{response.*}}`, `{{steps.<name>.*}}` and `{{transfer.*}}` templates,
+  `headersFrom()` for signed-URL headers, and per-step checkpoints so retries
+  never repeat a completed step.
+- `Secret::vault()` / `Secret::value()` credentials, `Secret::put()` /
+  `Secret::forget()`; specs, checkpoints and the vault are sealed with
+  AES-256-GCM using a non-exportable Android Keystore key and never appear in
+  snapshots.
+- `TransferNotification` makes the work expedited and runs it as a `dataSync`
+  foreground service with a throttled progress bar and optional
+  completion/failure notifications.
+- `retry($times, Backoff, $delaySeconds)` (408/425/429/5xx and network errors
+  only), `network()`, `tag()`, `unique()` de-duplication, `request()` for
+  durable bodiless or JSON requests.
+- `watch()` live snapshots (conflated long-poll), `all(tag:)`, `find()`,
+  `retry()`, `cancel()`, `prune(olderThanDays:)`, `TransferHandle`,
+  `TransferStage`, `TransferResponse` and richer `TransferSnapshot`.
+- Optional `->transcode(VideoPreset::...)` pre-step delegated to
+  `pushinbr/pam-native-media` 0.4+ through its stable `MediaTranscoding` entry
+  point, so upload-only apps do not ship Media3.
+- Android JVM unit tests and instrumented tests (MockWebServer, WorkManager,
+  cross-plugin transcode).
+
+### Known limitations
+
+- iOS keeps the 0.2 single-request behaviour internally; 0.3 pipelines are
+  rejected on iOS with `pipelinesUnsupportedOnIOS` until the URLSession port lands.
+
 ## 0.1.0 - 2026-08-01
 
 - Initial public release of the documented PAM Native package contract.

@@ -50,23 +50,81 @@ New to PAM? Follow the **[five-minute PAM Native setup](https://push-in.github.i
 
 ## See it in action
 
-Durable uploads and downloads that continue outside the PHP runtime. Android uses WorkManager `2.11.2`; iOS uses a launch-event-enabled background `URLSession`.
+Durable uploads, downloads and request chains that keep running outside the PHP runtime. Android uses WorkManager `2.11.2` (expedited + `dataSync` foreground service when a notification is set) and OkHttp `4.12.0`.
 
 ```bash
 pam add background-transfer
 pam doctor
 ```
 
+### Upload a video and post the message, even if the app is closed
+
 ```php
-$transfers = new Pam\Native\BackgroundTransfer\BackgroundTransfer();
-$transfers->download('https://cdn.example.com/movie.mp4', 'media/movie.mp4', function (?string $id, ?string $error): void {
-    // Persist the id and query it after relaunch.
-});
+use Pam\Native\BackgroundTransfer\{Backoff, BackgroundTransfer, HttpStep, Multipart, NetworkRequirement, Secret, TransferHandle, TransferNotification, TransferSnapshot};
+
+Secret::put('session', $accessToken); // refresh it any time; queued transfers read the latest value
+
+BackgroundTransfer::upload('https://api.example.com/media')
+    ->multipart(fn (Multipart $m) => $m->file('file', $video->path, 'video/mp4')->field('caption', $caption))
+    ->header('Idempotency-Key', $clientMessageId)
+    ->bearer(Secret::vault('session'))
+    ->notification(TransferNotification::make('Enviando vídeo')->progress()->failed('Falha ao enviar'))
+    ->network(NetworkRequirement::Unmetered)
+    ->retry(3, Backoff::Exponential)
+    ->then(HttpStep::post('https://api.example.com/chats/42/messages')
+        ->bearer(Secret::vault('session'))
+        ->json(['media_id' => '{{response.id}}', 'client_id' => $clientMessageId]))
+    ->tag('chat:42')
+    ->dispatch(fn (TransferHandle $transfer) => $transfer->watch(
+        fn (TransferSnapshot $s) => $this->progress = $s->progress(),
+    ));
 ```
 
-Transfers require HTTPS. Paths are always resolved inside the application sandbox and traversal is rejected natively. State, kind and network requirements are sequential integer-backed enums. Android retries transient failures up to three times and honors connected, unmetered, or not-roaming constraints.
+### Signed URL uploads
 
-Platform support: Android API 26+, iOS 15+, PAM Native 0.8.x.
+```php
+BackgroundTransfer::upload('{{steps.sign.data.upload_url}}')->put()
+    ->file($photo->path, 'image/jpeg')
+    ->headersFrom('steps.sign.data.headers')
+    ->before(HttpStep::post('https://api.example.com/uploads/signed-url')
+        ->bearer(Secret::vault('session'))->json(['file_name' => 'photo.jpg'])->as('sign'))
+    ->then(HttpStep::post('https://api.example.com/posts')
+        ->json(['media_items' => [['key' => '{{steps.sign.data.key}}']]]))
+    ->dispatch();
+```
+
+### Transcode before upload (with `pushinbr/pam-native-media` 0.4+)
+
+```php
+BackgroundTransfer::upload('https://api.example.com/media')
+    ->multipart(fn (Multipart $m) => $m->file('file', 'captures/clip.mov', 'video/quicktime'))
+    ->transcode(\Pam\Native\Media\VideoPreset::Chat720p)
+    ->dispatch();
+```
+
+### Downloads, inspection and housekeeping
+
+```php
+BackgroundTransfer::download('https://cdn.example.com/movie.mp4')->to('downloads/movie.mp4')->dispatch();
+
+BackgroundTransfer::all(fn (array $transfers) => ..., tag: 'chat:42'); // reconcile after relaunch
+BackgroundTransfer::watch($id, fn (TransferSnapshot $s) => ...);
+BackgroundTransfer::retry($id);   // resumes after the last completed step
+BackgroundTransfer::cancel($id);
+BackgroundTransfer::prune(olderThanDays: 7);
+```
+
+Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
+
+Retries cover network errors and HTTP 408/425/429/5xx; other 4xx responses fail immediately with `statusCode` and `response` on the snapshot. Completed steps are checkpointed, so neither automatic nor manual retries repeat them.
+
+Security: URLs must be HTTPS (plain HTTP is accepted only for loopback test servers). Paths are PAM sandbox paths (`FileReference::$path`) and traversal is rejected natively. Transfer specs, step checkpoints and the secret vault are encrypted with AES-256-GCM using a non-exportable Android Keystore key and are excluded from backups; snapshots never contain secrets.
+
+Platform support: Android API 26+ (full), iOS 15+ (0.2 single-request transfers only; 0.3 pipelines are Android-only for now), PAM Native `>=1.0.35 <2.0.0`.
+
+### Design note: why transcoding lives in pam-native-media
+
+PAM Native compiles each plugin as an independent Android library, so plugins cannot link against each other. Media owns the codec stack (Media3 Transformer, fast-start rewriting) and exposes one stable JVM entry point, `dev.pam.media.MediaTranscoding.transcode(...)`, kept through R8. This package binds it reflectively only when `->transcode()` is used: upload-only apps never ship Media3, there is a single transcoder implementation to maintain, and the dependency points from the generic transport to the media capability, never the other way around.
 
 ## What installation does
 
@@ -78,12 +136,20 @@ Use `pam packages` to inspect availability and `pam remove background-transfer` 
 
 | API | Responsibility |
 | --- | --- |
-| `BackgroundTransfer` | Create uploads/downloads and query durable work. |
-| `TransferSnapshot` | Read identifier, progress, state, and error context. |
-| `NetworkRequirement` | Require connected, unmetered, or not-roaming networks. |
-| `TransferState` / `TransferKind` | Typed lifecycle and direction enums. |
+| `BackgroundTransfer` | `upload()`, `download()`, `request()`, `watch()`, `find()`, `all()`, `retry()`, `cancel()`, `prune()`. |
+| `PendingTransfer` | Fluent body, headers, bearer, notification, network, retry, chain, tag, unique, transcode, `dispatch()`. |
+| `HttpStep` / `Multipart` | Chained requests and streamed multipart bodies. |
+| `Secret` | Vault-backed or literal credentials, encrypted at rest. |
+| `TransferNotification` | Foreground progress notification (expedited work). |
+| `TransferHandle` / `TransferWatch` | Persistable id, live observation, cancel and retry. |
+| `TransferSnapshot` / `TransferResponse` | State, stage, bytes, attempt, last HTTP response. |
+| `NetworkRequirement`, `Backoff`, `HttpMethod`, `TransferState`, `TransferStage`, `TransferKind` | Sequential integer-backed enums. |
 
 All coded states, kinds, and variants are sequential integer-backed enums. Use enum cases in application code; do not depend on raw wire numbers.
+
+## Tests
+
+`composer test` runs the PHP contract suite. Android JVM tests live in `android/src/test` and instrumented tests (MockWebServer, WorkManager, cross-plugin transcode) in `android/src/androidTest`; run them from a PAM Android host that includes this plugin (and `pam-native-media` for the transcode test) with `connectedDebugAndroidTest`.
 
 ## Production checklist
 
@@ -102,7 +168,7 @@ All coded states, kinds, and variants are sequential integer-backed enums. Use e
 
 ## Compatibility and support
 
-This package targets PAM Native `0.8.x`, Android API 26+, and iOS 15+ unless a platform-specific section above states a stricter requirement. Platform SDKs, credentials, entitlements, physical hardware, and store configuration remain application responsibilities.
+This package targets PAM Native `>=1.0.35 <2.0.0`, Android API 26+, and iOS 15+ unless a platform-specific section above states a stricter requirement. Platform SDKs, credentials, entitlements, physical hardware, and store configuration remain application responsibilities.
 
 - [PAM documentation](https://push-in.github.io/pam-docs/introduction/)
 - [PAM Native overview](https://push-in.github.io/pam-docs/native/overview/)
