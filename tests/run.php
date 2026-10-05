@@ -68,6 +68,10 @@ $test('serializes a chained multipart upload with typed integer enums', static f
     $assert($upload['method'] === 2 && $upload['name'] === 'upload' && $upload['url'] === 'https://api.example.test/media', 'main step mismatch');
     $assert($upload['body']['parts'][0] === ['type' => 'file', 'name' => 'file', 'path' => 'captures/clip.mov', 'mimeType' => 'video/quicktime', 'filename' => 'clip.mov'], 'file part mismatch');
     $assert($upload['body']['parts'][2]['value'] === '1', 'bool field must be encoded as 1');
+    $assert(!array_key_exists('literal', $upload['body']['parts'][1]), 'fields are template-resolved by default');
+    $literal = (new Multipart())->field('body', '{{response.id}}', template: false)->fields(['a' => 'x'], template: false)->parts();
+    $assert($literal[0] === ['type' => 'field', 'name' => 'body', 'value' => '{{response.id}}', 'literal' => true], 'literal field must be flagged on the wire');
+    $assert(($literal[1]['literal'] ?? false) === true, 'literal fields() must flag every part');
     $assert($upload['headers'][1] === ['name' => 'Authorization', 'prefix' => 'Bearer ', 'secret' => ['vault' => 'session']], 'bearer vault mismatch');
     $assert($message['body'] === ['type' => 'json', 'value' => ['media' => '{{response.id}}', 'chat' => 42]], 'chained JSON mismatch');
     $fake->assertSatisfied();

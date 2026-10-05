@@ -113,7 +113,7 @@ internal class TransferHttp(
             is BodySpec.Multipart -> MultipartBody.Builder().setType(MultipartBody.FORM).apply {
                 spec.parts.forEach { part ->
                     when (part) {
-                        is PartSpec.Field -> addFormDataPart(part.name, templates.string(part.value))
+                        is PartSpec.Field -> addFormDataPart(part.name, if (part.literal) part.value else templates.string(part.value))
                         is PartSpec.File -> files(part.path, part.mimeType, part.filename).let { local ->
                             addFormDataPart(part.name, local.filename, FileBody(local.file, local.mimeType.toMediaType(), counter, cancelled))
                         }

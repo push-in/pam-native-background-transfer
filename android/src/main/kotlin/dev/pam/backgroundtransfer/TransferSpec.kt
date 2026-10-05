@@ -191,7 +191,8 @@ internal sealed interface BodySpec {
 internal sealed interface PartSpec {
     val name: String
 
-    data class Field(override val name: String, val value: String) : PartSpec
+    /** [literal] fields are sent verbatim: user text never resolves `{{templates}}`. */
+    data class Field(override val name: String, val value: String, val literal: Boolean = false) : PartSpec
 
     data class File(override val name: String, val path: String, val mimeType: String, val filename: String) : PartSpec
 
@@ -202,7 +203,7 @@ internal sealed interface PartSpec {
                 "Invalid multipart part name"
             }
             return when (json.getString("type")) {
-                "field" -> Field(name, json.getString("value"))
+                "field" -> Field(name, json.getString("value"), json.optBoolean("literal", false))
                 "file" -> File(
                     name = name,
                     path = json.getString("path").also(TransferPaths::requireRelative),

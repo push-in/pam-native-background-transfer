@@ -65,7 +65,7 @@ use Pam\Native\BackgroundTransfer\{Backoff, BackgroundTransfer, HttpStep, Multip
 Secret::put('session', $accessToken); // refresh it any time; queued transfers read the latest value
 
 BackgroundTransfer::upload('https://api.example.com/media')
-    ->multipart(fn (Multipart $m) => $m->file('file', $video->path, 'video/mp4')->field('caption', $caption))
+    ->multipart(fn (Multipart $m) => $m->file('file', $video->path, 'video/mp4')->field('caption', $caption, template: false))
     ->header('Idempotency-Key', $clientMessageId)
     ->bearer(Secret::vault('session'))
     ->notification(TransferNotification::make('Enviando vídeo')->progress()->failed('Falha ao enviar'))
@@ -116,7 +116,7 @@ BackgroundTransfer::cancel($id);
 BackgroundTransfer::prune(olderThanDays: 7);
 ```
 
-Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
+Multipart fields built from user text should use `->field($name, $value, template: false)`, which sends the value verbatim. Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
 
 Retries cover network errors and HTTP 408/425/429/5xx; other 4xx responses fail immediately with `statusCode` and `response` on the snapshot. Completed steps are checkpointed, so neither automatic nor manual retries repeat them. Mark a non-idempotent step with `->retryable(false)` to fail instead of repeating it automatically.
 

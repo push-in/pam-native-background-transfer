@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 - 2026-10-05
+
+### Added
+
+- `Multipart::field($name, $value, template: false)` (and `fields(..., template: false)`)
+  sends user-provided text verbatim. Previously every multipart field was
+  template-resolved, so a caption containing `{{...}}` failed the transfer or
+  could expand data from an earlier step response.
+
 ## 0.3.2 - 2026-10-05
 
 ### Changed

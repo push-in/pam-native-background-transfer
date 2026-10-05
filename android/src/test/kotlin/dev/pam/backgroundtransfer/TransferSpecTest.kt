@@ -36,6 +36,10 @@ class TransferSpecTest {
         assertTrue(parsed.steps[0].retryable)
         val once = TransferSpec.parse(spec.replace("\"url\":\"https://api.example.test/messages\"", "\"url\":\"https://api.example.test/messages\",\"retry\":false"))
         assertTrue(!once.steps[1].retryable)
+        val caption = (parsed.steps[0].body as BodySpec.Multipart).parts.filterIsInstance<PartSpec.Field>().single()
+        assertTrue(!caption.literal)
+        val literal = TransferSpec.parse(spec.replace("\"value\":\"{{transfer.tag}}\"", "\"value\":\"{{transfer.tag}}\",\"literal\":true"))
+        assertTrue((literal.steps[0].body as BodySpec.Multipart).parts.filterIsInstance<PartSpec.Field>().single().literal)
     }
 
     @Test
