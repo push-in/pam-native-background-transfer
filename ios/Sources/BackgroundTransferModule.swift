@@ -9,6 +9,8 @@ public final class BackgroundTransferModule: NativeModule, @unchecked Sendable {
         do {
             let values = try WireMap.decode(payload)
             switch method {
+            case "enqueue" where values["spec"] != nil:
+                throw TransferError.pipelinesUnsupportedOnIOS
             case "enqueue":
                 guard case let .integer(kind)?=values["kind"], case let .text(urlText)?=values["url"], case let .text(path)?=values["path"], let url=URL(string:urlText), url.scheme=="https" else { throw TransferError.invalidRequest }
                 let id = try coordinator.enqueue(kind:kind,url:url,path:path)
@@ -40,4 +42,4 @@ private final class TransferCoordinator:NSObject,URLSessionDownloadDelegate,URLS
     private func save(id:String,kind:Int64,state:Int64,transferred:Int64,total:Int64,message:String){guard !id.isEmpty else{return};lock.lock();defer{lock.unlock()};let p="dev.pam.transfer.\(id).";defaults.set(kind,forKey:p+"kind");defaults.set(state,forKey:p+"state");defaults.set(transferred,forKey:p+"transferred");defaults.set(total,forKey:p+"total");defaults.set(message,forKey:p+"message")}
     private func details(id:String)->(kind:Int64,transferred:Int64,total:Int64)?{let s=snapshot(id:id);guard case let .integer(kind)?=s["kind"],case let .integer(transferred)?=s["bytesTransferred"],case let .integer(total)?=s["bytesTotal"] else{return nil};return(kind,transferred,total)}
 }
-private enum TransferError:Error{case invalidRequest;case invalidPath}
+private enum TransferError:Error{case invalidRequest;case invalidPath;case pipelinesUnsupportedOnIOS}

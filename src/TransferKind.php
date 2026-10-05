@@ -1,4 +1,12 @@
 <?php
+
 declare(strict_types=1);
+
 namespace Pam\Native\BackgroundTransfer;
-enum TransferKind:int { case Download=1; case Upload=2; }
+
+enum TransferKind: int
+{
+    case Download = 1;
+    case Upload = 2;
+    case Request = 3;
+}

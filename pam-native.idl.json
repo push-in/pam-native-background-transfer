@@ -2,9 +2,14 @@
   "$schema":"vendor/pushinbr/pam-native-plugin-kit/resources/pam-native.idl.schema.json",
   "version":1,"namespace":"Pam.BackgroundTransfer",
   "enums":{
-    "TransferKind":{"Download":1,"Upload":2},
-    "TransferState":{"Queued":1,"Running":2,"Succeeded":3,"Failed":4,"Cancelled":5},
-    "NetworkRequirement":{"Connected":1,"Unmetered":2,"NotRoaming":3}
+    "TransferKind":{"Download":1,"Upload":2,"Request":3},
+    "TransferState":{"Queued":1,"Running":2,"Succeeded":3,"Failed":4,"Cancelled":5,"Retrying":6},
+    "TransferStage":{"Waiting":1,"Transcoding":2,"Uploading":3,"Requesting":4,"Downloading":5,"Done":6},
+    "NetworkRequirement":{"Connected":1,"Unmetered":2,"NotRoaming":3},
+    "Backoff":{"Linear":1,"Exponential":2},
+    "HttpMethod":{"Get":1,"Post":2,"Put":3,"Patch":4,"Delete":5}
   },
-  "records":{"TransferSnapshot":{"identifier":"string","kind":"TransferKind","state":"TransferState","bytesTransferred":"int","bytesTotal":"int"}}
+  "records":{
+    "TransferSnapshot":{"identifier":"string","kind":"TransferKind","state":"TransferState","bytesTransferred":"int","bytesTotal":"int","message":"string","stage":"TransferStage","step":"int","steps":"int","attempt":"int","tag":"string","statusCode":"int","responseBody":"string","createdAt":"int","updatedAt":"int"}
+  }
 }
