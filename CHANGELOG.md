@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1 - 2026-10-05
+
+### Fixed
+
+- iOS: call the `PamMediaTranscoding` class method through the Objective-C
+  class object and pass the cancel/progress blocks as objects, matching the
+  pushinbr/pam-native-media 0.5 contract.
+
 ## 0.4.0 - 2026-10-05
 
 ### Added

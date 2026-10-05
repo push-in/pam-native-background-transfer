@@ -168,9 +168,13 @@ enum TransferFiles {
 enum MediaTranscoderBridge {
     private static let selector = NSSelectorFromString("transcode:")
 
-    static var available: Bool {
-        (NSClassFromString("PamMediaTranscoding") as? NSObject.Type)?.responds(to: selector) == true
+    private static var entry: AnyObject? {
+        guard let type = NSClassFromString("PamMediaTranscoding") else { return nil }
+        let object = type as AnyObject
+        return object.responds(to: selector) ? object : nil
     }
+
+    static var available: Bool { entry != nil }
 
     /// Synchronous; returns media's `TranscodeResult` dictionary.
     static func transcode(
@@ -180,18 +184,18 @@ enum MediaTranscoderBridge {
         cancelled: @escaping () -> Bool,
         progress: @escaping (Double) -> Void
     ) throws -> [String: Any] {
-        guard let type = NSClassFromString("PamMediaTranscoding") as? NSObject.Type, type.responds(to: selector) else {
+        guard let type = entry else {
             throw TransferFailure(message: "Video transcoding requires pushinbr/pam-native-media 0.4 or newer", retryable: false)
         }
         let optionsJson = (try? JSONSerialization.data(withJSONObject: options)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
-        let cancelledBlock: @convention(block) () -> Bool = cancelled
-        let progressBlock: @convention(block) (Double) -> Void = progress
+        let cancelledBlock: @convention(block) () -> Bool = { cancelled() }
+        let progressBlock: @convention(block) (Double) -> Void = { progress($0) }
         let request: NSDictionary = [
             "source": source.path,
             "destination": destination.path,
             "options": optionsJson,
-            "cancelled": cancelledBlock,
-            "progress": progressBlock,
+            "cancelled": unsafeBitCast(cancelledBlock, to: AnyObject.self),
+            "progress": unsafeBitCast(progressBlock, to: AnyObject.self),
         ]
         guard let result = type.perform(selector, with: request)?.takeUnretainedValue() as? [String: Any] else {
             throw TransferFailure(message: "Video transcoding failed", retryable: false)
