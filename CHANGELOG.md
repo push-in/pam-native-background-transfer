@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 - 2026-10-05
+
+### Added
+
+- iOS runs 0.3 pipelines natively on a background `URLSession`: multipart,
+  raw file, JSON, form and bodiless steps, `before()`/`then()` chains with
+  `{{response.*}}`/`{{steps.*}}`/`{{transfer.*}}` templates and `headersFrom()`,
+  per-step encrypted checkpoints, `saveTo` downloads, retries with linear or
+  exponential backoff (`earliestBeginDate`), `retryable(false)`, `unique()`,
+  tags, `watch()`, `all()`, `find()`, `retry()`, `cancel()` and `prune()`.
+- iOS seals specs/checkpoints with AES-256-GCM (Keychain device-only key) and
+  stores `Secret::vault()` values in the Keychain.
+- iOS `transcode()` delegates to `pushinbr/pam-native-media` 0.5+
+  (`PamMediaTranscoding`), honouring `fallbackToOriginal`.
+- XCTest mirror of the Android suites (`ios/Tests`).
+
+### Removed
+
+- The iOS `pipelinesUnsupportedOnIOS` rejection and the 0.2 single-request iOS
+  path.
+
+### Known limitations
+
+- iOS code is uncompiled on the release machine (no Xcode) and needs device
+  validation; see the README for iOS-specific behaviour.
+
 ## 0.3.3 - 2026-10-05
 
 ### Added

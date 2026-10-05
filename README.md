@@ -122,7 +122,24 @@ Retries cover network errors and HTTP 408/425/429/5xx; other 4xx responses fail 
 
 Security: URLs must be HTTPS (plain HTTP is accepted only for loopback test servers). Paths are PAM sandbox paths (`FileReference::$path`) and traversal is rejected natively. Transfer specs, step checkpoints and the secret vault are encrypted with AES-256-GCM using a non-exportable Android Keystore key and are excluded from backups; snapshots never contain secrets.
 
-Platform support: Android API 26+ (full), iOS 15+ (0.2 single-request transfers only; 0.3 pipelines are Android-only for now), PAM Native `>=1.0.35 <2.0.0`.
+Platform support: Android API 26+ and iOS 15+ (full pipelines on both), PAM Native `>=1.0.35 <2.0.0`.
+
+On iOS every step runs on a background `URLSession` (uploads from a body file
+next to the encrypted spec, downloads to the sandbox), so transfers continue
+while the app is suspended or terminated and iOS relaunches the app to chain
+the next step; the plugin registers
+`application(_:handleEventsForBackgroundURLSession:completionHandler:)` on the
+host delegate automatically. Specs and checkpoints are sealed with AES-256-GCM
+using a device-only Keychain key, `Secret::vault()` values are Keychain items,
+and retries wait out the backoff with `earliestBeginDate` while suspended.
+iOS limitations: there is no foreground-service progress notification (the
+`completed`/`failed` texts of `TransferNotification` are posted as local
+notifications), `network()` maps `Unmetered` to no cellular/expensive networks
+and treats `NotRoaming` as connected, and the optional `transcode()` pre-step
+needs CPU time, so it runs while the app is running (protected by a background
+task) and resumes on the next launch if iOS suspends the app. The iOS
+implementation has not been validated on a device yet; see
+`ios/Tests/BackgroundTransferTests.swift`.
 
 ### Design note: why transcoding lives in pam-native-media
 

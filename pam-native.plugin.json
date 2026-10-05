@@ -11,7 +11,7 @@
     "dependencies":["androidx.work:work-runtime:2.11.2","com.squareup.okhttp3:okhttp:4.12.0"],
     "sourceDirs":["android/src/main/kotlin"]
   },
-  "ios":{"minimumVersion":"15.0","sourceDirs":["ios/Sources"]},
+  "ios":{"minimumVersion":"15.0","sourceDirs":["ios/Sources"],"frameworks":["Security","UserNotifications"]},
   "idl":"pam-native.idl.json",
   "modules":[{"name":"background-transfer","class":"dev.pam.backgroundtransfer.BackgroundTransferModule","iosClass":"BackgroundTransferModule"}],
   "views":[]
