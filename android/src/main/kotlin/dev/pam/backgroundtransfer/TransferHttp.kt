@@ -60,10 +60,10 @@ internal class TransferHttp(
         } catch (error: TransferFailure) {
             throw error
         } catch (error: IOException) {
-            throw TransferFailure(error.message ?: "Network failure", retryable = !cancelled(), cause = error)
+            throw TransferFailure(error.message ?: "Network failure", retryable = step.retryable && !cancelled(), cause = error)
         }
         if (result.statusCode !in 200..299) {
-            val retryable = result.statusCode == 408 || result.statusCode == 425 || result.statusCode == 429 || result.statusCode >= 500
+            val retryable = step.retryable && (result.statusCode == 408 || result.statusCode == 425 || result.statusCode == 429 || result.statusCode >= 500)
             throw TransferFailure("HTTP ${result.statusCode}", retryable, result.statusCode, result.body)
         }
         return result

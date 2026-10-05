@@ -30,6 +30,8 @@ final class HttpStep
 
     private ?string $saveTo = null;
 
+    private bool $retryable = true;
+
     private function __construct(
         private HttpMethod $method,
         private string $url,
@@ -184,6 +186,19 @@ final class HttpStep
         return $this;
     }
 
+    /**
+     * Marks a non-idempotent step (e.g. a `POST` that consumes a one-time key)
+     * as never retried automatically: its network and 408/425/429/5xx failures
+     * fail the transfer instead. A manual `BackgroundTransfer::retry()` still
+     * resumes from it.
+     */
+    public function retryable(bool $retryable = true): self
+    {
+        $this->retryable = $retryable;
+
+        return $this;
+    }
+
     public function hasBody(): bool
     {
         return $this->body !== null;
@@ -222,6 +237,7 @@ final class HttpStep
             'headersFrom' => $this->headersFrom,
             'body' => $this->body,
             'saveTo' => $this->saveTo,
+            'retry' => $this->retryable ? null : false,
         ], static fn (mixed $value): bool => $value !== null && $value !== []);
     }
 }

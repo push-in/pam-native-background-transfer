@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 - 2026-10-05
+
+### Added
+
+- `HttpStep::retryable(false)` marks a non-idempotent step (for example a
+  `POST` that consumes a one-time upload key) as never retried automatically:
+  its network and 408/425/429/5xx failures fail the transfer instead of
+  repeating the request. Manual `BackgroundTransfer::retry()` still resumes
+  from that step.
+
 ## 0.3.0 - 2026-10-05
 
 ### Breaking

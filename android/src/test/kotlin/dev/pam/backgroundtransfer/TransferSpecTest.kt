@@ -33,6 +33,9 @@ class TransferSpecTest {
         assertEquals("session", parsed.steps[0].headers.single().secretVault)
         assertEquals("POST", parsed.steps[1].method)
         assertTrue(parsed.steps[1].body is BodySpec.Json)
+        assertTrue(parsed.steps[0].retryable)
+        val once = TransferSpec.parse(spec.replace("\"url\":\"https://api.example.test/messages\"", "\"url\":\"https://api.example.test/messages\",\"retry\":false"))
+        assertTrue(!once.steps[1].retryable)
     }
 
     @Test

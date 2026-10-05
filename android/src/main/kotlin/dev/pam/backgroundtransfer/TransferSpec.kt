@@ -100,6 +100,7 @@ internal data class StepSpec(
     val headersFrom: String?,
     val body: BodySpec?,
     val saveTo: String?,
+    val retryable: Boolean = true,
 ) {
     companion object {
         private val NAME = Regex("[A-Za-z][A-Za-z0-9_]{0,63}")
@@ -144,6 +145,7 @@ internal data class StepSpec(
                 headersFrom = json.optStringOrNull("headersFrom"),
                 body = body,
                 saveTo = json.optStringOrNull("saveTo")?.also(TransferPaths::requireRelative),
+                retryable = json.optBoolean("retry", true),
             )
         }
     }

@@ -87,6 +87,9 @@ $test('supports signed URL flows with before steps and response headers', static
     $assert(count($wire['steps']) === 3 && $wire['steps'][1]['method'] === HttpMethod::Put->value, 'step order mismatch');
     $assert($wire['steps'][1]['headersFrom'] === 'steps.sign.data.headers' && $wire['steps'][1]['body']['type'] === 'file', 'signed upload mismatch');
     $assert($wire['steps'][0]['headers'][0]['secret'] === ['value' => 'literal-token'], 'literal bearer must travel as a secret');
+    $assert(!array_key_exists('retry', $wire['steps'][2]), 'steps are retryable by default');
+    $once = HttpStep::post('https://api.example.test/imports')->json(['key' => '{{steps.sign.data.key}}'])->retryable(false)->toWire();
+    $assert($once['retry'] === false, 'non-retryable step must be flagged on the wire');
     NativeTestHarness::uninstall();
 });
 
