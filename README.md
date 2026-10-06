@@ -147,24 +147,202 @@ PAM Native compiles each plugin as an independent Android library, so plugins ca
 
 ## What installation does
 
-`pam add background-transfer` resolves the official compatible package, performs a non-mutating Composer preflight, updates the normal `composer.json` and `composer.lock`, refreshes generated native integration when required, and leaves the project ready for `pam doctor` validation.
+`pam add background-transfer` (or `pam composer require pushinbr/pam-native-background-transfer` followed by `pam doctor --fix`) resolves the official compatible package, performs a non-mutating Composer preflight, updates the normal `composer.json` and `composer.lock`, refreshes generated native integration when required, and leaves the project ready for `pam doctor` validation. The package is a PAM Native plugin (module `background-transfer`); nothing is added to `pam-native.json`.
 
 Use `pam packages` to inspect availability and `pam remove background-transfer` to uninstall the capability safely. Direct Composer commands are an advanced interoperability path; PAM is the supported application workflow.
 
-## API guide
+### Android
 
-| API | Responsibility |
+Merged permissions: `INTERNET`, `ACCESS_NETWORK_STATE`, `FOREGROUND_SERVICE`,
+`FOREGROUND_SERVICE_DATA_SYNC` and `POST_NOTIFICATIONS`. The manifest merges
+WorkManager's `SystemForegroundService` with `foregroundServiceType="dataSync"`,
+used when a transfer has a `notification()` (expedited work with a progress
+notification). Request `PermissionKind::Notifications` on Android 13+ if you
+want the notification to be visible; transfers run either way. Dependencies:
+`androidx.work:work-runtime:2.11.2` and `com.squareup.okhttp3:okhttp:4.12.0`.
+`transcode()` additionally needs `pushinbr/pam-native-media` 0.4+ installed.
+
+### iOS
+
+Frameworks `Security` and `UserNotifications`; no Info.plist keys or
+capabilities are required (background `URLSession`s do not need a background
+mode). The plugin installs the
+`application(_:handleEventsForBackgroundURLSession:completionHandler:)` hook on
+the host delegate. `transcode()` needs `pushinbr/pam-native-media` 0.5+.
+
+## A real example: Zé Chat
+
+Zé Chat sends every photo, video and album message as one durable transfer.
+The outbox row stores the transfer id, so after a crash or relaunch the screen
+re-attaches instead of uploading twice:
+
+```php
+use Pam\Native\BackgroundTransfer\{Backoff, BackgroundTransfer, Multipart, Secret, TransferHandle, TransferNotification, TransferSnapshot, TransferState};
+use Pam\Native\Media\VideoPreset;
+
+// The access token lives in the encrypted vault; queued transfers read the latest value.
+Secret::put('session', $accessToken, function (bool $stored) use ($accessToken, $record): void {
+    $auth = $stored ? Secret::vault('session') : Secret::value($accessToken);
+
+    $transfer = BackgroundTransfer::upload("https://api.example.com/chats/{$record->chatId}/messages")
+        ->multipart(function (Multipart $m) use ($record): void {
+            $m->field('body', $record->body, template: false)            // user text: never templated
+              ->field('idempotency_key', $record->idempotencyKey, template: false)
+              ->field('type', 3);
+            foreach ($record->files as $file) {
+                $m->file('media_files[]', $file['path'], $file['mimeType'], $file['fileName']);
+            }
+        })
+        ->header('Accept', 'application/json')
+        ->bearer($auth)
+        ->notification(TransferNotification::make('Zé Chat')->text('Enviando mídia')->channel('Envios')
+            ->progress()->failed('Não foi possível enviar a mídia.'))
+        ->retry(3, Backoff::Exponential)
+        ->unique('chat-media:'.hash('sha256', $record->idempotencyKey))   // a double tap returns the same transfer
+        ->tag("chat:{$record->chatId}");
+
+    if ($record->hasVideoToCompress) {
+        // H.264/AAC fast start, ≤1080p (720p for long videos); devices that cannot encode send the original.
+        $transfer->transcode(VideoPreset::Adaptive, fastStart: true, fallbackToOriginal: true);
+    }
+
+    $transfer->dispatch(
+        function (TransferHandle $handle) use ($record): void {
+            $record->transferId = $handle->id;       // persist before following it
+            $this->outbox->save($record);
+            $handle->watch(fn (TransferSnapshot $s) => $s->finished()
+                ? $this->settle($record, $s->state, $s->response?->statusCode ?? 0, $s->response?->body ?? $s->message ?? '')
+                : $this->progress($record, (int) round($s->progress() * 100)));
+        },
+        fn (string $error) => $this->settle($record, TransferState::Failed, 0, $error),
+    );
+});
+
+// On relaunch: re-attach, deliver a result that finished while the app was dead, or resume.
+BackgroundTransfer::find($record->transferId, function (?TransferSnapshot $s) use ($record): void {
+    match (true) {
+        $s === null => $this->send($record),                         // unknown id: dispatch again (server dedupes)
+        !$s->finished() => $this->follow($record),
+        $s->state === TransferState::Succeeded => $this->settle($record, $s->state, $s->response?->statusCode ?? 0, $s->response?->body ?? ''),
+        default => BackgroundTransfer::retry($s->identifier),         // resumes after the last completed step
+    };
+});
+
+BackgroundTransfer::prune(olderThanDays: 7);                        // once per launch
+```
+
+A runnable minimal app is in [`example/`](example).
+
+## API reference
+
+All classes live in `Pam\Native\BackgroundTransfer`. Native calls return the
+module request id (`int`).
+
+### `BackgroundTransfer` (module `background-transfer`)
+
+| Method | Description |
 | --- | --- |
-| `BackgroundTransfer` | `upload()`, `download()`, `request()`, `watch()`, `find()`, `all()`, `retry()`, `cancel()`, `prune()`. |
-| `PendingTransfer` | Fluent body, headers, bearer, notification, network, retry, chain, tag, unique, transcode, `dispatch()`. |
-| `HttpStep` / `Multipart` | Chained requests and streamed multipart bodies. |
-| `Secret` | Vault-backed or literal credentials, encrypted at rest. |
-| `TransferNotification` | Foreground progress notification (expedited work). |
-| `TransferHandle` / `TransferWatch` | Persistable id, live observation, cancel and retry. |
-| `TransferSnapshot` / `TransferResponse` | State, stage, bytes, attempt, last HTTP response. |
-| `NetworkRequirement`, `Backoff`, `HttpMethod`, `TransferState`, `TransferStage`, `TransferKind` | Sequential integer-backed enums. |
+| `upload(string $url): PendingTransfer` | Upload; needs a body (`multipart()`, `file()`, `json()` or `form()`). Defaults to `POST`. |
+| `download(string $url): PendingTransfer` | Download; needs `to($path)`. |
+| `request(HttpStep $step): PendingTransfer` | A durable request chain starting with `$step`. |
+| `watch(string $id, Closure(TransferSnapshot) $listener): TransferWatch` | Live snapshots pushed natively until the transfer finishes or `stop()`. |
+| `find(string $id, Closure(?TransferSnapshot) $then)` / `status()` | Durable state; `null` when the id is unknown. |
+| `all(Closure(list<TransferSnapshot>) $then, ?string $tag = null)` | Every stored transfer, optionally by tag. |
+| `retry(string $id, ?Closure(bool) $then = null)` | Resumes a failed/cancelled transfer after its last completed step. |
+| `cancel(string $id, ?Closure(bool) $then = null)` | Cancels; watchers receive `Cancelled`. |
+| `prune(int $olderThanDays = 7, ?Closure(int) $then = null)` | Deletes finished transfers older than 0–3650 days; `$then` receives the number removed. |
 
-All coded states, kinds, and variants are sequential integer-backed enums. Use enum cases in application code; do not depend on raw wire numbers.
+### `PendingTransfer` (fluent, `dispatch()` sends it)
+
+| Method | Description |
+| --- | --- |
+| `method(HttpMethod)`, `put()`, `patch()` | HTTP method of the main step. |
+| `multipart(Closure(Multipart))`, `file(string $path, string $mimeType)`, `json(array)`, `form(array)` | Body (uploads stream from disk). |
+| `to(string $path)` | Download destination (sandbox path). |
+| `header(string, string\|Secret)`, `headers(array)`, `headersFrom(string $templatePath)`, `bearer(string\|Secret)` | Headers; `headersFrom('steps.sign.data.headers')` copies a JSON object from an earlier step. |
+| `as(string $name)` | Names the main step for `{{steps.<name>…}}`. |
+| `before(HttpStep ...$steps)`, `then(HttpStep ...$steps)` | Steps before/after the main step (64 in total). |
+| `notification(TransferNotification)` | Android foreground notification; iOS local notifications for `completed`/`failed`. |
+| `network(NetworkRequirement)` | `Connected` (default), `Unmetered`, `NotRoaming`. |
+| `retry(int $times, Backoff $backoff = Exponential, int $delaySeconds = 30)` | 0–20 retries, delay 10 s–5 h. |
+| `tag(string)`, `unique(string $key)` | Grouping; `unique()` returns the unfinished transfer with the same key instead of a new one. |
+| `transcode(VideoPreset $preset, ?int $maxBitrate = null, bool $fastStart = true, bool $fallbackToOriginal = false)` | Re-encode the video file(s) first (needs `pam-native-media`); bitrate 100 kbps–50 Mbps. |
+| `dispatch(?Closure(TransferHandle) $then = null, ?Closure(string) $failed = null): int` | Persists and schedules the transfer. |
+| `toWire(): array` | Encoded spec. |
+
+### `HttpStep`
+
+`to(HttpMethod, string $url)`, `get()`, `post()`, `put()`, `patch()`,
+`delete()`; `method()`, `as(string $name)`, `header()`, `headers()`,
+`headersFrom()`, `bearer()`, `json(array)`, `form(array)`,
+`multipart(Closure)`, `file(string $path, string $mimeType)`,
+`saveTo(string $path)` (write the response body to a file),
+`retryable(bool $retryable = true)`; `hasBody()`, `savesToFile()`, `files()`,
+`toWire()`. `GET` steps cannot have a body.
+
+### `Multipart`
+
+`file(string $name, string $path, string $mimeType = 'application/octet-stream', ?string $filename = null)`,
+`field(string $name, string|int|float|bool $value, bool $template = true)`,
+`fields(array $fields, bool $template = true)`, `parts()`. Fields are limited
+to 1 MiB; pass `template: false` for user text.
+
+### `Secret`
+
+`vault(string $name)` (resolved natively when the step runs),
+`value(string $value)` (literal, encrypted inside the spec),
+`put(string $name, string $value, ?Closure(bool, ?string) $then = null)`,
+`forget(string $name, ?Closure(bool) $then = null)`, `toWire()`.
+`__debugInfo()` hides the value. Names: 1–64 of `[A-Za-z0-9._:-]`; values:
+1–16384 bytes without line breaks.
+
+### `TransferNotification`
+
+`make(string $title)`, `text(string)`, `progress(bool $show = true)`,
+`channel(string $name)` (Android channel name, default "Transfers"),
+`completed(string $title)`, `failed(string $title)`, `toWire()`. Texts are
+1–200 characters.
+
+### `TransferHandle`, `TransferWatch`
+
+`TransferHandle` (readonly `id`, `kind`, `tag`): `watch()`, `status()`,
+`cancel()`, `retry()`. `TransferWatch` (readonly `identifier`): `stop()`,
+`active()`. Persist `TransferHandle::$id`; handles are not restored after a
+relaunch.
+
+### `TransferSnapshot`, `TransferResponse` (readonly)
+
+`TransferSnapshot`: `identifier`, `kind`, `state`, `bytesTransferred`,
+`bytesTotal`, `message` (error text), `stage`, `step`, `steps`, `attempt`,
+`tag`, `response` (last HTTP response), `createdAt`, `updatedAt` (Unix ms);
+`progress(): float` (0–1, `1.0` when succeeded), `finished(): bool`.
+`TransferResponse`: `statusCode`, `body` (first 256 KiB on Android),
+`successful()`, `json()` (`null` when not JSON).
+
+### Enums (int-backed)
+
+| Enum | Cases |
+| --- | --- |
+| `TransferState` | `Queued = 1`, `Running`, `Succeeded`, `Failed`, `Cancelled`, `Retrying = 6`; `finished()` |
+| `TransferStage` | `Waiting = 1`, `Transcoding`, `Uploading`, `Requesting`, `Downloading`, `Done = 6` |
+| `TransferKind` | `Download = 1`, `Upload = 2`, `Request = 3` |
+| `NetworkRequirement` | `Connected = 1`, `Unmetered = 2`, `NotRoaming = 3` |
+| `Backoff` | `Linear = 1`, `Exponential = 2` |
+| `HttpMethod` | `Get = 1`, `Post`, `Put`, `Patch`, `Delete = 5`; `verb()` |
+
+### Errors
+
+Builders throw `InvalidArgumentException` for non-HTTPS or invalid URLs,
+absolute or traversal paths, transfer ids that do not match
+`[A-Za-z0-9-]{8,64}` (`watch()`, `find()`, `retry()`, `cancel()`), invalid header names/values or MIME types,
+invalid secret, tag, unique-key and step names, oversized multipart fields,
+notification texts outside 1–200 characters, retry counts outside 0–20,
+delays outside 10 s–5 h, `prune()` ages outside 0–3650 days, a body on `GET`
+and unencodable JSON. `dispatch()` throws `LogicException` for an upload
+without a body, a download without `to()` and more than 64 steps. Runtime
+failures never throw: `dispatch()` reports `$failed(string)` (for example a
+missing source file) and finished transfers carry `state = Failed`,
+`message` and the last `response`.
 
 ## Tests
 
@@ -183,9 +361,17 @@ All coded states, kinds, and variants are sequential integer-backed enums. Use e
 - **Work never starts:** verify HTTPS, network constraints, and OS background policy.
 - **Path rejected:** use an application-sandbox-relative path without traversal.
 - **Progress stops in development:** query the persisted identifier after runtime reload.
+- **A watch goes silent:** a watch ends when the native module restarts; re-read the durable state with `BackgroundTransfer::find()` (Zé Chat re-checks after 30 s without a snapshot).
+- **A 4xx response is not retried:** only network errors and HTTP 408/425/429/5xx are retried; inspect `TransferSnapshot::$response`.
+- **A template path is missing:** the transfer fails without retrying; check `{{response.…}}`/`{{steps.<name>.…}}` against the real JSON.
 - **Native integration is stale:** run `pam doctor --fix`, rebuild the native host, and inspect the first reported diagnostic.
 
 ## Compatibility and support
+
+| `pushinbr/pam-native-background-transfer` | `pushinbr/pam-native` | Android | iOS |
+| --- | --- | --- | --- |
+| 0.4.x | `>=1.0.35 <2.0.0` (tested with 1.14.x) | API 26+ | 15+, full pipelines (`transcode()` with `pam-native-media` 0.5+) |
+| 0.3.x | `>=1.0.35 <2.0.0` | API 26+ | Single requests only |
 
 This package targets PAM Native `>=1.0.35 <2.0.0`, Android API 26+, and iOS 15+ unless a platform-specific section above states a stricter requirement. Platform SDKs, credentials, entitlements, physical hardware, and store configuration remain application responsibilities.
 
