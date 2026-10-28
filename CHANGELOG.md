@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.2 - 2026-10-28
+
+### Fixed
+
+- iOS: a transfer no longer hangs forever when the background transfer
+  service refuses or invalidates the background `URLSession` (for example an
+  app built without code signing, where `nsurlsessiond` rejects the session).
+  The engine now falls back to a foreground session for the rest of the
+  process, without spending a retry, when:
+  - the background session is invalidated (`didBecomeInvalidWithError`);
+  - a step fails with `backgroundSessionWasDisconnected`,
+    `backgroundSessionInUseByAnotherProcess`,
+    `backgroundSessionRequiresSharedContainer`, or a cancellation the app did
+    not request;
+  - a step makes no progress at all for 30 s while the app is active and the
+    network is up (the daemon never started it);
+  - the background session does not answer `getAllTasks` on launch.
+- iOS: watchers receive the fallback as a record update (`state` retrying,
+  `message` "Background transfer service unavailable; continuing in the
+  foreground"); if the foreground attempt also fails the transfer ends
+  `failed` with the error message as before.
+- iOS: response buffers are keyed per session, so foreground and background
+  task identifiers never collide.
+- XCTest coverage for the stall rule, the service-failure classification,
+  per-session task keys and the fallback event.
+
 ## 0.4.1 - 2026-10-05
 
 ### Fixed

@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import PamNative
 import UIKit
 import UserNotifications
@@ -218,8 +219,34 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
 
     let store = TransferStore.shared
     private let queue = DispatchQueue(label: "dev.pam.background-transfer.engine", qos: .utility)
-    private var bodies: [Int: Data] = [:]
-    private var downloads: [Int: (status: Int, body: String)] = [:]
+    /// A step task with no byte, response or callback for this long, while the
+    /// app is active and the network is up, means the background transfer
+    /// service never took it (e.g. the daemon refused the session).
+    static let stallTimeout: TimeInterval = 30
+    /// How long resumeOnLaunch waits for the background session to list its tasks.
+    static let listTimeout: TimeInterval = 8
+
+    private var bodies: [TaskKey: Data] = [:]
+    private var downloads: [TaskKey: (status: Int, body: String)] = [:]
+    /// The task currently running each transfer's step (either session).
+    private var inFlight: [String: URLSessionTask] = [:]
+    /// Tasks created on `foregroundSession`.
+    private var foregroundTasks: Set<ObjectIdentifier> = []
+    /// Tasks that already produced a byte, a response or a callback.
+    private var alive: Set<TaskKey> = []
+    /// False once the background session proved unusable in this process:
+    /// new steps then run on `foregroundSession` until the next launch.
+    private(set) var backgroundUsable = true
+    private var online = true
+    private var appActive = true
+    private lazy var pathMonitor: NWPathMonitor = {
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            self?.queue.async { self?.online = path.status == .satisfied }
+        }
+        monitor.start(queue: queue)
+        return monitor
+    }()
     private var stepBase: [String: Int64] = [:]
     private var stepTotals: [String: Int64] = [:]
     private var transcoding: Set<String> = []
@@ -235,6 +262,27 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
         return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
     }()
 
+    /// Fallback used only while the app runs, when the background session is
+    /// invalidated or never starts a task. Same delegate, same pipeline.
+    private(set) lazy var foregroundSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        configuration.httpMaximumConnectionsPerHost = 4
+        return URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+    }()
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.appActive = true }
+        }
+        center.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: nil) { [weak self] _ in
+            self?.queue.async { self?.appActive = false }
+        }
+    }
+
     // MARK: Lifecycle
 
     /// Reconnects to the background session and restarts unfinished
@@ -243,12 +291,25 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
         queue.async {
             guard !self.resumed else { return }
             self.resumed = true
+            _ = self.pathMonitor
+            var listed = false
             self.session.getAllTasks { tasks in
                 let active = Set(tasks.compactMap { TaskTag.parse($0.taskDescription)?.id })
                 self.queue.async {
+                    guard !listed else { return }
+                    listed = true
                     for record in self.store.all() where !TransferStates.finished(record.state) && !active.contains(record.id) {
                         self.start(record.id)
                     }
+                }
+            }
+            // A session the transfer daemon refused never answers getAllTasks.
+            self.queue.asyncAfter(deadline: .now() + Self.listTimeout) {
+                guard !listed else { return }
+                listed = true
+                self.backgroundUnavailable("the background session did not answer")
+                for record in self.store.all() where !TransferStates.finished(record.state) {
+                    self.start(record.id)
                 }
             }
         }
@@ -295,8 +356,10 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
                 $0.message = "Cancelled"
             }
         }
-        session.getAllTasks { tasks in
-            tasks.filter { TaskTag.parse($0.taskDescription)?.id == id }.forEach { $0.cancel() }
+        for target in [session, foregroundSession] {
+            target.getAllTasks { tasks in
+                tasks.filter { TaskTag.parse($0.taskDescription)?.id == id }.forEach { $0.cancel() }
+            }
         }
     }
 
@@ -455,21 +518,108 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
                 workDirectory: try TransferPaths.workDirectory(id),
                 network: spec.network
             )
+            let background = backgroundUsable
+            let target = background ? session : foregroundSession
             let task: URLSessionTask
             if let body = built.bodyFile {
-                task = session.uploadTask(with: built.request, fromFile: body)
+                task = target.uploadTask(with: built.request, fromFile: body)
             } else {
-                task = session.downloadTask(with: built.request)
+                task = target.downloadTask(with: built.request)
             }
             task.taskDescription = TaskTag(id: id, step: index, attempt: attempt).description
-            if delay > 0 { task.earliestBeginDate = Date().addingTimeInterval(delay) }
+            if !background { foregroundTasks.insert(ObjectIdentifier(task)) }
+            if delay > 0 {
+                if background {
+                    task.earliestBeginDate = Date().addingTimeInterval(delay)
+                } else {
+                    // earliestBeginDate only applies to background sessions.
+                    inFlight[id] = task
+                    queue.asyncAfter(deadline: .now() + delay) {
+                        guard self.inFlight[id] === task, task.state == .suspended else { return }
+                        task.resume()
+                    }
+                    return
+                }
+            }
+            inFlight[id] = task
             task.resume()
+            if background {
+                _ = pathMonitor
+                queue.asyncAfter(deadline: .now() + delay + Self.stallTimeout) { self.checkStall(id, task) }
+            }
         } catch let failure as TransferFailure {
             fail(id, spec: spec, failure)
         } catch {
             fail(id, spec: spec, TransferFailure(message: error.localizedDescription, retryable: false))
         }
     }
+
+    // MARK: Background session fallback (engine queue)
+
+    private func checkStall(_ id: String, _ task: URLSessionTask) {
+        guard backgroundUsable, inFlight[id] === task else { return }
+        let stalled = Self.isStalled(
+            running: task.state == .running,
+            bytes: task.countOfBytesSent + task.countOfBytesReceived,
+            hasResponse: task.response != nil,
+            sawCallback: alive.contains(TaskKey(session, task)),
+            online: online,
+            appActive: appActive
+        )
+        if stalled {
+            backgroundUnavailable("the background transfer service did not start the upload")
+            reroute(id)
+        } else if task.state == .running || task.state == .suspended {
+            queue.asyncAfter(deadline: .now() + Self.stallTimeout) { self.checkStall(id, task) }
+        }
+    }
+
+    /// Pure stall rule (tested): a background task counts as never started
+    /// only while it should be making progress (app active, network up).
+    static func isStalled(running: Bool, bytes: Int64, hasResponse: Bool, sawCallback: Bool, online: Bool, appActive: Bool) -> Bool {
+        running && bytes == 0 && !hasResponse && !sawCallback && online && appActive
+    }
+
+    /// Errors meaning the background transfer service, not the request, failed.
+    /// A cancellation the app did not ask for only happens when the session is
+    /// invalidated.
+    static func isBackgroundServiceFailure(_ error: Error?, cancelledByApp: Bool) -> Bool {
+        guard let code = (error as? URLError)?.code else { return false }
+        switch code {
+        case .backgroundSessionWasDisconnected, .backgroundSessionInUseByAnotherProcess, .backgroundSessionRequiresSharedContainer:
+            return true
+        case .cancelled:
+            return !cancelledByApp
+        default:
+            return false
+        }
+    }
+
+    private func backgroundUnavailable(_ reason: String) {
+        guard backgroundUsable else { return }
+        backgroundUsable = false
+        NSLog("[pam-background-transfer] %@; continuing in the foreground", reason)
+    }
+
+    /// Moves a transfer's current step to the foreground session without
+    /// spending a retry, and tells watchers why (message on the record).
+    private func reroute(_ id: String) {
+        if let task = inFlight.removeValue(forKey: id) {
+            // Its completion (cancelled) must not reach finishStep.
+            task.taskDescription = nil
+            task.cancel()
+        }
+        guard let record = store.get(id), !TransferStates.finished(record.state), !transcoding.contains(id),
+              let spec = try? TransferFiles.readSpec(id) else { return }
+        let progress = TransferFiles.readProgress(id)
+        store.update(id) {
+            $0.state = TransferStates.retrying
+            $0.message = Self.fallbackMessage
+        }
+        launch(id, spec: spec, index: progress.next, delay: 0)
+    }
+
+    static let fallbackMessage = "Background transfer service unavailable; continuing in the foreground"
 
     private func localFile(_ path: String, progress: TransferProgress) throws -> URL {
         if let output = progress.transcoded[path], !output.isEmpty, FileManager.default.fileExists(atPath: output) {
@@ -487,6 +637,7 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
 
     private func finishStep(_ tag: TaskTag, status: Int, body: String, error: Error?) {
         let id = tag.id
+        inFlight[id] = nil
         guard let record = store.get(id), !TransferStates.finished(record.state) else { return }
         guard let spec = try? TransferFiles.readSpec(id) else {
             fail(id, spec: nil, TransferFailure(message: "Transfer payload is unavailable", retryable: false))
@@ -577,12 +728,14 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
     // MARK: URLSession delegate
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let key = TaskKey(session, dataTask)
         queue.async {
-            var buffer = self.bodies[dataTask.taskIdentifier] ?? Data()
+            self.alive.insert(key)
+            var buffer = self.bodies[key] ?? Data()
             if buffer.count < Self.maxResponseBytes {
                 buffer.append(data.prefix(Self.maxResponseBytes - buffer.count))
             }
-            self.bodies[dataTask.taskIdentifier] = buffer
+            self.bodies[key] = buffer
         }
     }
 
@@ -594,7 +747,9 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
         totalBytesExpectedToSend: Int64
     ) {
         guard let tag = TaskTag.parse(task.taskDescription) else { return }
+        let key = TaskKey(session, task)
         queue.async {
+            self.alive.insert(key)
             let base = self.stepBase[tag.id] ?? 0
             let total = self.stepTotals[tag.id] ?? self.store.get(tag.id)?.total ?? 0
             self.store.progress(tag.id, transferred: min(base + totalBytesSent, max(total, base + totalBytesSent)), total: total)
@@ -609,7 +764,9 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
         totalBytesExpectedToWrite: Int64
     ) {
         guard let tag = TaskTag.parse(downloadTask.taskDescription) else { return }
+        let key = TaskKey(session, downloadTask)
         queue.async {
+            self.alive.insert(key)
             self.store.progress(tag.id, transferred: totalBytesWritten, total: max(totalBytesExpectedToWrite, 0))
         }
     }
@@ -639,18 +796,38 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             body = String(decoding: (try? handle.read(upToCount: Self.maxResponseBytes)) ?? Data(), as: UTF8.self)
             try? handle.close()
         }
-        queue.sync { self.downloads[downloadTask.taskIdentifier] = (status, body) }
+        let key = TaskKey(session, downloadTask)
+        queue.sync { self.downloads[key] = (status, body) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let tag = TaskTag.parse(task.taskDescription) else { return }
+        let key = TaskKey(session, task)
+        guard let tag = TaskTag.parse(task.taskDescription) else {
+            queue.async {
+                self.alive.remove(key)
+                self.foregroundTasks.remove(ObjectIdentifier(task))
+                self.bodies[key] = nil
+                self.downloads[key] = nil
+            }
+            return
+        }
+        let background = session === self.session
         queue.async {
+            self.alive.remove(key)
+            self.foregroundTasks.remove(ObjectIdentifier(task))
             let status = (task.response as? HTTPURLResponse)?.statusCode ?? 0
             var body = ""
-            if let download = self.downloads.removeValue(forKey: task.taskIdentifier) {
+            if let download = self.downloads.removeValue(forKey: key) {
                 body = download.body
-            } else if let data = self.bodies.removeValue(forKey: task.taskIdentifier) {
+            } else if let data = self.bodies.removeValue(forKey: key) {
                 body = String(decoding: data, as: UTF8.self)
+            }
+            let cancelledByApp = self.store.get(tag.id)?.state == TransferStates.cancelled
+            if background, Self.isBackgroundServiceFailure(error, cancelledByApp: cancelledByApp) {
+                self.backgroundUnavailable("the background session failed: \(error?.localizedDescription ?? "")")
+                if self.inFlight[tag.id] === task { self.inFlight[tag.id] = nil }
+                self.reroute(tag.id)
+                return
             }
             if let directory = try? TransferPaths.workDirectory(tag.id) {
                 TransferRequestBuilder.cleanTemporaryBodies(in: directory)
@@ -670,12 +847,34 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
         completionHandler(request.url?.scheme?.lowercased() == "https" ? request : nil)
     }
 
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        guard session === self.session else { return }
+        queue.async {
+            self.backgroundUnavailable("the background session was invalidated: \(error?.localizedDescription ?? "no error")")
+            for record in self.store.all() where !TransferStates.finished(record.state) {
+                if let task = self.inFlight[record.id], self.foregroundTasks.contains(ObjectIdentifier(task)) { continue }
+                self.reroute(record.id)
+            }
+        }
+    }
+
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         queue.async {
             let completion = self.backgroundCompletion
             self.backgroundCompletion = nil
             DispatchQueue.main.async { completion?() }
         }
+    }
+}
+
+/// Identifies a task across both sessions (task identifiers restart per session).
+struct TaskKey: Hashable {
+    let session: ObjectIdentifier
+    let task: Int
+
+    init(_ session: URLSession, _ task: URLSessionTask) {
+        self.session = ObjectIdentifier(session)
+        self.task = task.taskIdentifier
     }
 }
 

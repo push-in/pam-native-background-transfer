@@ -118,6 +118,68 @@ final class BackgroundTransferTests: XCTestCase {
         XCTAssertNil(TaskTag.parse("garbage"))
     }
 
+    func testStalledBackgroundTaskFallsBackOnlyWhenItShouldBeMoving() {
+        XCTAssertTrue(TransferEngine.isStalled(running: true, bytes: 0, hasResponse: false, sawCallback: false, online: true, appActive: true))
+        // Progress of any kind means the daemon took the task.
+        XCTAssertFalse(TransferEngine.isStalled(running: true, bytes: 1, hasResponse: false, sawCallback: false, online: true, appActive: true))
+        XCTAssertFalse(TransferEngine.isStalled(running: true, bytes: 0, hasResponse: true, sawCallback: false, online: true, appActive: true))
+        XCTAssertFalse(TransferEngine.isStalled(running: true, bytes: 0, hasResponse: false, sawCallback: true, online: true, appActive: true))
+        // Offline or suspended apps legitimately wait on the background session.
+        XCTAssertFalse(TransferEngine.isStalled(running: true, bytes: 0, hasResponse: false, sawCallback: false, online: false, appActive: true))
+        XCTAssertFalse(TransferEngine.isStalled(running: true, bytes: 0, hasResponse: false, sawCallback: false, online: true, appActive: false))
+        XCTAssertFalse(TransferEngine.isStalled(running: false, bytes: 0, hasResponse: false, sawCallback: false, online: true, appActive: true))
+    }
+
+    func testBackgroundServiceFailuresAreToldApartFromRequestFailures() {
+        XCTAssertTrue(TransferEngine.isBackgroundServiceFailure(URLError(.backgroundSessionWasDisconnected), cancelledByApp: false))
+        XCTAssertTrue(TransferEngine.isBackgroundServiceFailure(URLError(.backgroundSessionInUseByAnotherProcess), cancelledByApp: false))
+        XCTAssertTrue(TransferEngine.isBackgroundServiceFailure(URLError(.backgroundSessionRequiresSharedContainer), cancelledByApp: false))
+        // An invalidated session cancels its tasks; only an app cancel is a real cancel.
+        XCTAssertTrue(TransferEngine.isBackgroundServiceFailure(URLError(.cancelled), cancelledByApp: false))
+        XCTAssertFalse(TransferEngine.isBackgroundServiceFailure(URLError(.cancelled), cancelledByApp: true))
+        XCTAssertFalse(TransferEngine.isBackgroundServiceFailure(URLError(.timedOut), cancelledByApp: false))
+        XCTAssertFalse(TransferEngine.isBackgroundServiceFailure(URLError(.notConnectedToInternet), cancelledByApp: false))
+        XCTAssertFalse(TransferEngine.isBackgroundServiceFailure(nil, cancelledByApp: false))
+    }
+
+    func testTaskKeysDoNotCollideAcrossSessions() {
+        let background = TransferEngine.shared.session
+        let foreground = TransferEngine.shared.foregroundSession
+        XCTAssertFalse(background === foreground)
+        // Background sessions only take upload/download tasks.
+        let a = background.downloadTask(with: URL(string: "https://a.example/x")!)
+        let b = foreground.downloadTask(with: URL(string: "https://a.example/x")!)
+        defer { a.cancel(); b.cancel() }
+        XCTAssertNotEqual(TaskKey(background, a), TaskKey(foreground, b))
+        XCTAssertEqual(TaskKey(foreground, b), TaskKey(foreground, b))
+        // A rerouted task loses its tag, so its cancellation never reaches finishStep.
+        b.taskDescription = nil
+        XCTAssertNil(TaskTag.parse(b.taskDescription))
+    }
+
+    func testFallbackIsReportedOnTheWatchedRecord() {
+        let store = TransferStore.shared
+        let record = TransferRecord(id: "fallback-\(UUID().uuidString.prefix(8))", kind: 2)
+        store.put(record)
+        defer { store.remove(record.id) }
+        let channel = WatchChannel()
+        channel.unsubscribe = store.observe(record.id) { channel.offer($0) }
+        store.update(record.id) {
+            $0.state = TransferStates.retrying
+            $0.message = TransferEngine.fallbackMessage
+        }
+        let next = expectation(description: "fallback event")
+        channel.next { status, payload in
+            XCTAssertEqual(status, .success)
+            let map = try? WireMap.decode(payload)
+            XCTAssertEqual(map?["state"], .integer(Int64(TransferStates.retrying)))
+            XCTAssertEqual(map?["message"], .text(TransferEngine.fallbackMessage))
+            next.fulfill()
+        }
+        wait(for: [next], timeout: 2)
+        channel.close()
+    }
+
     func testModuleRejectsLegacyAndUnknownRequests() {
         let module = BackgroundTransferModule()
         let legacy = expectation(description: "legacy")
