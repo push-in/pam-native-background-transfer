@@ -63,7 +63,7 @@ The video uploads and the message is posted even if the app is closed. Signed UR
 
 | Platform | Support | Notes |
 | --- | --- | --- |
-| Android | API 26+ | WorkManager 2.11.2 (expedited + `dataSync` foreground service when a notification is set), OkHttp 4.12.0 |
+| Android | API 24+ | WorkManager 2.11.2 (expedited + `dataSync` foreground service when a notification is set), OkHttp 4.12.0 |
 | iOS | 15.0+ | Background `URLSession` for every step; Security, UserNotifications; not validated on a device yet |
 | PAM Native | 1.0.35 to < 2.0.0 | From `pam-native.plugin.json`; PHP 8.5+ |
 

@@ -64,6 +64,7 @@ internal object TransferNotifications {
     }
 
     private fun ensureChannel(context: Context, id: String, name: String, importance: Int) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // no channels before Android 8
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         if (manager.getNotificationChannel(id) == null) manager.createNotificationChannel(NotificationChannel(id, name, importance))
     }

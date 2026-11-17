@@ -4,7 +4,7 @@
   "pamNative":{"minimum":"1.0.35","maximumExclusive":"2.0.0"},
   "php":{"provider":"Pam\\Native\\BackgroundTransfer\\BackgroundTransferPluginProvider"},
   "android":{
-    "namespace":"dev.pam.backgroundtransfer","minSdk":26,
+    "namespace":"dev.pam.backgroundtransfer","minSdk":24,
     "permissions":["android.permission.ACCESS_NETWORK_STATE","android.permission.INTERNET","android.permission.FOREGROUND_SERVICE","android.permission.FOREGROUND_SERVICE_DATA_SYNC","android.permission.POST_NOTIFICATIONS"],
     "manifest":"android/src/main/AndroidManifest.xml",
     "consumerRules":"android/consumer-rules.pro",

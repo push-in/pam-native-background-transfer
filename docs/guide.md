@@ -67,7 +67,7 @@ Retries cover network errors and HTTP 408/425/429/5xx; other 4xx responses fail 
 
 Security: URLs must be HTTPS (plain HTTP is accepted only for loopback test servers). Paths are PAM sandbox paths (`FileReference::$path`) and traversal is rejected natively. Transfer specs, step checkpoints and the secret vault are encrypted with AES-256-GCM using a non-exportable Android Keystore key and are excluded from backups; snapshots never contain secrets.
 
-Platform support: Android API 26+ and iOS 15+ (full pipelines on both), PAM Native `>=1.0.35 <2.0.0`.
+Platform support: Android API 24+ and iOS 15+ (full pipelines on both), PAM Native `>=1.0.35 <2.0.0`.
 
 On iOS every step runs on a background `URLSession` (uploads from a body file
 next to the encrypted spec, downloads to the sandbox), so transfers continue
