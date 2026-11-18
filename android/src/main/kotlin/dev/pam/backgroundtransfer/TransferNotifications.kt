@@ -45,8 +45,12 @@ internal object TransferNotifications {
         }
     }
 
-    /** Posts the optional completion/failure notification when the app may post notifications. */
-    fun result(context: Context, id: String, spec: NotificationSpec, success: Boolean, message: String) {
+    /**
+     * Posts the optional completion/failure notification when the app may post
+     * notifications. A failure shows only the app's (localized) `failedText`:
+     * the internal failure message stays in the transfer record.
+     */
+    fun result(context: Context, id: String, spec: NotificationSpec, success: Boolean) {
         val title = (if (success) spec.completed else spec.failed) ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -58,7 +62,7 @@ internal object TransferNotifications {
             .setContentTitle(title)
             .setSmallIcon(if (success) android.R.drawable.stat_sys_upload_done else android.R.drawable.stat_notify_error)
             .setAutoCancel(true)
-        if (!success && message.isNotBlank()) builder.setContentText(message.take(200))
+        spec.resultText(success)?.let(builder::setContentText)
         launchIntent(context)?.let(builder::setContentIntent)
         runCatching { NotificationManagerCompat.from(context).notify(notificationId(id) + 1, builder.build()) }
     }

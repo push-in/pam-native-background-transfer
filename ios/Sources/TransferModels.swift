@@ -58,6 +58,7 @@ struct NotificationSpec: Equatable {
     let progress: Bool
     let completed: String?
     let failed: String?
+    var failedText: String? = nil
 }
 
 struct HeaderSpec: Equatable {
@@ -283,7 +284,8 @@ struct TransferSpec {
                 text: nonEmpty(json["text"]).map { String($0.prefix(200)) },
                 progress: (json["progress"] as? Bool) ?? false,
                 completed: nonEmpty(json["completed"]).map { String($0.prefix(200)) },
-                failed: nonEmpty(json["failed"]).map { String($0.prefix(200)) }
+                failed: nonEmpty(json["failed"]).map { String($0.prefix(200)) },
+                failedText: nonEmpty(json["failedText"]).map { String($0.prefix(200)) }
             )
         }
         return TransferSpec(
@@ -476,14 +478,17 @@ enum TransferPaths {
         return file
     }
 
+    static var workRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pam-background-transfer", isDirectory: true)
+    }
+
     /// Private, non-backed-up working directory of one transfer.
     static func workDirectory(_ id: String) throws -> URL {
         guard id.range(of: "^[A-Za-z0-9-]{8,64}$", options: .regularExpression) != nil else {
             throw TransferError("Invalid transfer identifier")
         }
-        var url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("pam-background-transfer", isDirectory: true)
-            .appendingPathComponent(id, isDirectory: true)
+        var url = workRoot.appendingPathComponent(id, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true

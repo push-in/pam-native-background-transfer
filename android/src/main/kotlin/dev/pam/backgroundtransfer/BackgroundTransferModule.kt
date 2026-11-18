@@ -46,6 +46,7 @@ class BackgroundTransferModule(context: Context) : NativeModule, AutoCloseable {
                         "watch" -> watch(values.text("identifier"))
                         "unwatch" -> unwatch(values.integer("subscription"))
                         "cancel" -> cancel(values.text("identifier"))
+                        "forget" -> forget(values.text("identifier"))
                         "retry" -> retry(values.text("identifier"))
                         "prune" -> prune(values.integer("olderThanDays"))
                         "secretPut" -> emptyMap<String, WireValue>().also { vault.put(values.text("name"), values.text("value")) }
@@ -122,6 +123,20 @@ class BackgroundTransferModule(context: Context) : NativeModule, AutoCloseable {
         return emptyMap()
     }
 
+    /**
+     * Cancels the transfer if it still runs and deletes its record and working
+     * directory (encrypted spec, checkpoint, transcoded video). A worker that
+     * is still stopping deletes what it writes afterwards.
+     */
+    private fun forget(id: String): Map<String, WireValue> {
+        val known = store.get(id) != null
+        if (known) store.update(id) { if (TransferStates.finished(it.state)) it else it.copy(state = TransferStates.CANCELLED, stage = TransferStages.DONE, message = "Cancelled") }
+        WorkManager.getInstance(context).cancelUniqueWork(workName(id))
+        store.remove(id)
+        TransferFiles.delete(context, id)
+        return mapOf("removed" to WireValue.Flag(known))
+    }
+
     private fun retry(id: String): Map<String, WireValue> {
         val record = store.get(id) ?: error("Transfer not found")
         require(record.state == TransferStates.FAILED || record.state == TransferStates.CANCELLED) { "Only failed or cancelled transfers can be retried" }
@@ -139,6 +154,8 @@ class BackgroundTransferModule(context: Context) : NativeModule, AutoCloseable {
             TransferFiles.delete(context, record.id)
             store.remove(record.id)
         }
+        // Working directories without a record (forgotten while a worker was stopping, or left by an older version).
+        TransferFiles.orphans(context, store.all().mapTo(mutableSetOf()) { it.id }).forEach { it.deleteRecursively() }
         WorkManager.getInstance(context).pruneWork()
         return mapOf("removed" to WireValue.Integer(removed.size.toLong()))
     }

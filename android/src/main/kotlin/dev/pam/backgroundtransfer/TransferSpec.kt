@@ -71,7 +71,11 @@ internal data class NotificationSpec(
     val channel: String?,
     val completed: String?,
     val failed: String?,
+    val failedText: String? = null,
 ) {
+    /** Body of the result notification: only the app's (localized) failure text, never the internal message. */
+    fun resultText(success: Boolean): String? = if (success) null else failedText?.takeIf { it.isNotBlank() }
+
     companion object {
         fun parse(json: JSONObject) = NotificationSpec(
             title = json.getString("title").take(200),
@@ -80,6 +84,7 @@ internal data class NotificationSpec(
             channel = json.optStringOrNull("channel")?.take(200),
             completed = json.optStringOrNull("completed")?.take(200),
             failed = json.optStringOrNull("failed")?.take(200),
+            failedText = json.optStringOrNull("failedText")?.take(200),
         )
     }
 }

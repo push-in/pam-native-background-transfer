@@ -160,6 +160,15 @@ enum TransferFiles {
             try? FileManager.default.removeItem(at: directory)
         }
     }
+
+    /// Deletes working directories of transfers that no longer have a record.
+    static func deleteOrphans(known: Set<String>) {
+        let root = TransferPaths.workRoot
+        let entries = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
+        for entry in entries where !known.contains(entry.lastPathComponent) {
+            try? FileManager.default.removeItem(at: entry)
+        }
+    }
 }
 
 /// Optional bridge to `pushinbr/pam-native-media` 0.4+ on iOS: the media
@@ -250,6 +259,8 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
     private var stepBase: [String: Int64] = [:]
     private var stepTotals: [String: Int64] = [:]
     private var transcoding: Set<String> = []
+    /// Producer steps already re-run this run after a 401/403 (`TransferRefresh`).
+    private var refreshed: [String: Set<Int>] = [:]
     private var backgroundCompletion: (() -> Void)?
     private var resumed = false
 
@@ -388,7 +399,24 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             TransferFiles.delete(record.id)
             store.remove(record.id)
         }
+        // Working directories without a record (forgotten while a task was stopping, or left by an older version).
+        TransferFiles.deleteOrphans(known: Set(store.all().map(\.id)))
         return removed.count
+    }
+
+    /// Cancels the transfer if it still runs and deletes its record and working
+    /// directory (encrypted spec, checkpoint, transcoded video).
+    func forget(_ id: String) -> Bool {
+        let known = store.get(id) != nil
+        if known { try? cancel(id) }
+        store.remove(id)
+        TransferFiles.delete(id)
+        queue.async {
+            self.refreshed[id] = nil
+            self.stepBase[id] = nil
+            self.stepTotals[id] = nil
+        }
+        return known
     }
 
     // MARK: Execution (engine queue)
@@ -414,6 +442,7 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             }
         }
         progress = TransferFiles.readProgress(id)
+        refreshed[id] = []
         store.update(id) {
             $0.state = $0.attempt == 0 ? TransferStates.running : TransferStates.retrying
             $0.attempt = max($0.attempt, 1)
@@ -452,7 +481,10 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
                             source: source,
                             destination: output,
                             options: options,
-                            cancelled: { [weak self] in self?.store.get(id)?.state == TransferStates.cancelled },
+                            cancelled: { [weak self] in
+                                // Cancelled, or forgotten (no record).
+                                self?.store.get(id).map { $0.state == TransferStates.cancelled } ?? true
+                            },
                             progress: { [weak self] fraction in
                                 let overall = (Double(index) + min(max(fraction, 0), 1)) / Double(pending.count) * 1_000
                                 self?.store.progress(id, transferred: Int64(overall), total: 1_000)
@@ -473,7 +505,9 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             }
             self.queue.async {
                 self.transcoding.remove(id)
-                if let failure {
+                if self.store.get(id) == nil {
+                    TransferFiles.delete(id)
+                } else if let failure {
                     self.fail(id, spec: spec, failure)
                 } else {
                     self.start(id)
@@ -576,6 +610,14 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
 
     /// Pure stall rule (tested): a background task counts as never started
     /// only while it should be making progress (app active, network up).
+    /// Body of the completion/failure notification: the app's texts only.
+    static func notificationBody(_ spec: NotificationSpec, success: Bool) -> String? {
+        if success { return spec.completed }
+        guard let failed = spec.failed else { return nil }
+        guard let detail = spec.failedText, !detail.isEmpty else { return failed }
+        return "\(failed)\n\(detail)"
+    }
+
     static func isStalled(running: Bool, bytes: Int64, hasResponse: Bool, sawCallback: Bool, online: Bool, appActive: Bool) -> Bool {
         running && bytes == 0 && !hasResponse && !sawCallback && online && appActive
     }
@@ -638,7 +680,11 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
     private func finishStep(_ tag: TaskTag, status: Int, body: String, error: Error?) {
         let id = tag.id
         inFlight[id] = nil
-        guard let record = store.get(id), !TransferStates.finished(record.state) else { return }
+        guard let record = store.get(id) else {
+            TransferFiles.delete(id) // forgotten while the task was stopping
+            return
+        }
+        guard !TransferStates.finished(record.state) else { return }
         guard let spec = try? TransferFiles.readSpec(id) else {
             fail(id, spec: nil, TransferFailure(message: "Transfer payload is unavailable", retryable: false))
             return
@@ -650,6 +696,19 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             return
         }
         guard (200..<300).contains(status) else {
+            if let rewind = TransferRefresh.rewindTo(
+                steps: spec.steps, failed: tag.step, statusCode: status, refreshed: refreshed[id] ?? []
+            ) {
+                // A URL/header an earlier step signed has expired: run that step again (once per run).
+                refreshed[id, default: []].insert(rewind)
+                var progress = TransferFiles.readProgress(id)
+                progress.next = rewind
+                try? TransferFiles.writeProgress(id, progress)
+                let replayed = spec.steps[rewind..<tag.step].reduce(Int64(0)) { $0 + uploadSize($1, progress: progress) }
+                stepBase[id] = max(0, (stepBase[id] ?? 0) - replayed)
+                launch(id, spec: spec, index: rewind, delay: 0)
+                return
+            }
             let retryable = step.retryable && (status == 408 || status == 425 || status == 429 || status >= 500)
             retryOrFail(id, spec: spec, index: tag.step, TransferFailure(message: "HTTP \(status)", retryable: retryable, statusCode: status, body: body))
             return
@@ -696,7 +755,7 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             $0.responseBody = String(last.prefix(TransferRecord.maxResponseChars))
             $0.message = ""
         }
-        if let notification = spec.notification { notify(id, notification, success: true, message: "") }
+        if let notification = spec.notification { notify(id, notification, success: true) }
         TransferFiles.delete(id)
         stepBase[id] = nil
         stepTotals[id] = nil
@@ -710,16 +769,17 @@ final class TransferEngine: NSObject, URLSessionDataDelegate, URLSessionDownload
             $0.statusCode = failure.statusCode
             $0.responseBody = String(failure.body.prefix(TransferRecord.maxResponseChars))
         }
-        if let notification = spec?.notification { notify(id, notification, success: false, message: failure.message) }
+        if let notification = spec?.notification { notify(id, notification, success: false) }
     }
 
     /// iOS has no foreground-service progress; completion/failure texts are
-    /// posted as local notifications when provided.
-    private func notify(_ id: String, _ spec: NotificationSpec, success: Bool, message: String) {
-        guard let text = success ? spec.completed : spec.failed else { return }
+    /// posted as local notifications when provided. A failure never shows the
+    /// internal (English, technical) message, only the app's `failedText`.
+    private func notify(_ id: String, _ spec: NotificationSpec, success: Bool) {
+        guard let body = Self.notificationBody(spec, success: success) else { return }
         let content = UNMutableNotificationContent()
         content.title = spec.title
-        content.body = success ? text : (message.isEmpty ? text : "\(text) \(message)")
+        content.body = body
         UNUserNotificationCenter.current().add(
             UNNotificationRequest(identifier: "pam-transfer-\(id)", content: content, trigger: nil)
         )

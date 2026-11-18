@@ -38,6 +38,8 @@ BackgroundTransfer::upload('{{steps.sign.data.upload_url}}')->put()
     ->dispatch();
 ```
 
+Signed URLs expire. When a step whose URL or headers come from an earlier step (`{{steps.sign…}}`, `{{response…}}`, `headersFrom`) gets HTTP 401 or 403, the transfer runs the producing step again (once per run) and retries with the fresh value; a second 401/403 fails the transfer. This covers a PUT resumed hours after it was signed (offline, retry backoff, process death) and `retry()` of a transfer that failed that way. The producing step must not itself read `{{response…}}` (only the latest response is kept); name it with `as()` and reference it with `{{steps.<name>…}}`.
+
 ### Transcode before upload (with `pushinbr/pam-native-media` 0.4+)
 
 ```php
@@ -57,9 +59,12 @@ BackgroundTransfer::download('https://cdn.example.com/movie.mp4')->to('downloads
 BackgroundTransfer::all(fn (array $transfers) => ..., tag: 'chat:42'); // reconcile after relaunch
 BackgroundTransfer::watch($id, fn (TransferSnapshot $s) => ...);
 BackgroundTransfer::retry($id);   // resumes after the last completed step
-BackgroundTransfer::cancel($id);
+BackgroundTransfer::cancel($id);  // keeps the payload so retry() can resume
+BackgroundTransfer::forget($id);  // cancels and deletes the record and its files (transcoded video included)
 BackgroundTransfer::prune(olderThanDays: 7);
 ```
+
+`cancel()` and a permanent failure keep the transfer's working directory (encrypted payload, checkpoint and transcoded video) so `retry()` can resume. Call `forget()` when the transfer will never be retried (a discarded draft), and `prune()` once per launch: it deletes finished transfers older than the given age and any working directory left without a transfer.
 
 Multipart fields built from user text should use `->field($name, $value, template: false)`, which sends the value verbatim. Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
 
@@ -79,7 +84,8 @@ using a device-only Keychain key, `Secret::vault()` values are Keychain items,
 and retries wait out the backoff with `earliestBeginDate` while suspended.
 iOS limitations: there is no foreground-service progress notification (the
 `completed`/`failed` texts of `TransferNotification` are posted as local
-notifications), `network()` maps `Unmetered` to no cellular/expensive networks
+notifications; a failure body is the `failed` title plus the optional
+`failedText`), `network()` maps `Unmetered` to no cellular/expensive networks
 and treats `NotRoaming` as connected, and the optional `transcode()` pre-step
 needs CPU time, so it runs while the app is running (protected by a background
 task) and resumes on the next launch if iOS suspends the app. The iOS

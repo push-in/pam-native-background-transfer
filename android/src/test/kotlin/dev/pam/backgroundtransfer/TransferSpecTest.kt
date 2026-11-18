@@ -82,4 +82,43 @@ class TransferSpecTest {
         assertEquals(progress, TransferProgress.fromJson(progress.toJson()))
         assertEquals(1, progress.templates("id-12345678", null).lookup("response.id"))
     }
+
+    private val signedChain = """
+        {"version":1,"kind":2,
+         "notification":{"title":"Zé Chat","failed":"Não foi possível enviar","failedText":"Toque para tentar de novo"},
+         "steps":[
+          {"name":"sign0","method":2,"url":"https://api.example.test/sign","body":{"type":"json","value":{"n":0}}},
+          {"method":3,"url":"{{steps.sign0.data.upload_url}}","headersFrom":"steps.sign0.data.headers",
+           "body":{"type":"file","path":"media/a.jpg","mimeType":"image/jpeg"}},
+          {"name":"sign1","method":2,"url":"https://api.example.test/sign","body":{"type":"json","value":{"n":1}}},
+          {"method":3,"url":"{{steps.sign1.data.upload_url}}","body":{"type":"file","path":"media/b.jpg","mimeType":"image/jpeg"}},
+          {"method":2,"url":"https://api.example.test/posts","body":{"type":"json","value":{"key":"{{steps.sign1.data.key}}"}}},
+          {"method":2,"url":"https://api.example.test/after","body":{"type":"json","value":{"id":"{{response.id}}"}}},
+          {"method":3,"url":"{{response.next}}"}
+         ]}
+    """.trimIndent()
+
+    @Test
+    fun anExpiredSignedUrlRewindsOnceToTheStepThatSignedIt() {
+        val steps = TransferSpec.parse(signedChain).steps
+        // A resumed PUT (403/401) re-runs its sign step, once per run.
+        assertEquals(0, TransferRefresh.rewindTo(steps, failed = 1, statusCode = 403, refreshed = emptySet()))
+        assertEquals(2, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 401, refreshed = emptySet()))
+        assertEquals(null, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 403, refreshed = setOf(2)))
+        // Other statuses, body-only references and steps without producers fail as before.
+        assertEquals(null, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 404, refreshed = emptySet()))
+        assertEquals(null, TransferRefresh.rewindTo(steps, failed = 4, statusCode = 403, refreshed = emptySet()))
+        assertEquals(null, TransferRefresh.rewindTo(steps, failed = 0, statusCode = 403, refreshed = emptySet()))
+        // {{response}} names the previous step, which replays only if it does not read {{response}} itself.
+        assertEquals(null, TransferRefresh.rewindTo(steps, failed = 6, statusCode = 403, refreshed = emptySet()))
+    }
+
+    @Test
+    fun theFailureNotificationShowsOnlyTheAppText() {
+        val notification = TransferSpec.parse(signedChain).notification!!
+        assertEquals("Não foi possível enviar", notification.failed)
+        assertEquals("Toque para tentar de novo", notification.resultText(success = false))
+        assertEquals(null, notification.resultText(success = true))
+        assertEquals(null, notification.copy(failedText = null).resultText(success = false))
+    }
 }

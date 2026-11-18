@@ -121,7 +121,25 @@ final class BackgroundTransfer
     }
 
     /**
-     * Deletes finished transfers (and their encrypted payloads) older than the given age.
+     * Cancels the transfer if it still runs, then deletes its record and its
+     * working directory (encrypted payload, checkpoint and transcoded video).
+     * `cancel()` keeps them so `retry()` can resume; use this when the
+     * transfer will never be retried (a discarded draft, a deleted message).
+     *
+     * @param null|Closure(bool): void $then receives whether the transfer existed
+     */
+    public static function forget(string $id, ?Closure $then = null): int
+    {
+        self::assertIdentifier($id);
+
+        return NativeModules::call(self::MODULE, 'forget', ['identifier' => $id], static function (NativeModuleResult $result) use ($then): void {
+            $then?->__invoke($result->succeeded() && (bool) ($result->values()['removed'] ?? false));
+        });
+    }
+
+    /**
+     * Deletes finished transfers (and their encrypted payloads) older than the
+     * given age, and working directories left without a transfer.
      *
      * @param null|Closure(int): void $then receives the number of removed transfers
      */

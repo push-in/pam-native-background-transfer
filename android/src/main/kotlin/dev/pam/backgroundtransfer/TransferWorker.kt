@@ -53,6 +53,7 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
         }
         try {
             val result = run(id, spec)
+            if (store.get(id) == null) return@withContext forgotten(id)
             store.update(id) {
                 it.copy(
                     state = TransferStates.SUCCEEDED,
@@ -64,10 +65,11 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
                     message = "",
                 )
             }
-            spec.notification?.let { TransferNotifications.result(applicationContext, id, it, true, "") }
+            spec.notification?.let { TransferNotifications.result(applicationContext, id, it, true) }
             TransferFiles.delete(applicationContext, id)
             Result.success()
         } catch (error: CancellationException) {
+            if (store.get(id) == null) TransferFiles.delete(applicationContext, id)
             store.update(id) { current ->
                 if (current.state == TransferStates.CANCELLED) current
                 else current.copy(state = TransferStates.QUEUED, stage = TransferStages.WAITING, message = "Waiting to resume")
@@ -75,7 +77,8 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
             throw error
         } catch (error: Throwable) {
             val failure = error as? TransferFailure ?: TransferFailure(error.message ?: "Transfer failed", retryable = false, cause = error)
-            if (store.get(id)?.state == TransferStates.CANCELLED) return@withContext Result.failure()
+            val current = store.get(id) ?: return@withContext forgotten(id)
+            if (current.state == TransferStates.CANCELLED) return@withContext Result.failure()
             if (failure.retryable && runAttemptCount < spec.retry.times) {
                 store.update(id) {
                     it.copy(
@@ -96,7 +99,7 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
                         responseBody = failure.body.take(TransferRecord.MAX_RESPONSE_CHARS),
                     )
                 }
-                spec.notification?.let { TransferNotifications.result(applicationContext, id, it, false, failure.message.orEmpty()) }
+                spec.notification?.let { TransferNotifications.result(applicationContext, id, it, false) }
                 Result.failure()
             }
         }
@@ -119,7 +122,9 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
         var sent = 0L
         store.progress(id, 0, total)
         var last = StepResult(0, progress.last.orEmpty())
-        for (index in progress.next until spec.steps.size) {
+        val refreshed = mutableSetOf<Int>()
+        var index = progress.next
+        while (index < spec.steps.size) {
             val step = spec.steps[index]
             val stage = when {
                 step.saveTo != null -> TransferStages.DOWNLOADING
@@ -142,7 +147,13 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
                 )
             } catch (error: TransferFailure) {
                 sent = stepStart
-                throw error
+                val rewind = TransferRefresh.rewindTo(spec.steps, index, error.statusCode, refreshed) ?: throw error
+                // A URL/header an earlier step signed has expired: run that step again (once per run).
+                refreshed += rewind
+                progress = progress.copy(next = rewind)
+                TransferFiles.writeProgress(applicationContext, id, progress)
+                index = rewind
+                continue
             }
             progress = progress.copy(
                 next = index + 1,
@@ -150,8 +161,15 @@ class TransferWorker(context: Context, parameters: WorkerParameters) : Coroutine
                 named = step.name?.let { progress.named + (it to last.body) } ?: progress.named,
             )
             TransferFiles.writeProgress(applicationContext, id, progress)
+            index++
         }
         return last
+    }
+
+    /** `BackgroundTransfer::forget` removed the record while this run was ending: drop what it wrote. */
+    private fun forgotten(id: String): Result {
+        TransferFiles.delete(applicationContext, id)
+        return Result.failure()
     }
 
     private fun transcode(id: String, spec: TransferSpec, initial: TransferProgress): TransferProgress {

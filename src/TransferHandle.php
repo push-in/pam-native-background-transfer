@@ -34,6 +34,12 @@ final readonly class TransferHandle
         return BackgroundTransfer::cancel($this->id, $then);
     }
 
+    /** @param null|Closure(bool): void $then receives whether the transfer existed */
+    public function forget(?Closure $then = null): int
+    {
+        return BackgroundTransfer::forget($this->id, $then);
+    }
+
     /** @param null|Closure(bool): void $then */
     public function retry(?Closure $then = null): int
     {

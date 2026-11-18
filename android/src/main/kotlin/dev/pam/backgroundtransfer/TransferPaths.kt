@@ -27,8 +27,10 @@ internal object TransferPaths {
     /** Private, non-backed-up working directory of one transfer (encrypted payloads, transcodes). */
     fun workDirectory(context: Context, id: String): File {
         require(id.matches(Regex("[A-Za-z0-9-]{8,64}"))) { "Invalid transfer identifier" }
-        return File(File(context.noBackupFilesDir, "pam-background-transfer"), id)
+        return File(workRoot(context), id)
     }
+
+    fun workRoot(context: Context): File = File(context.noBackupFilesDir, "pam-background-transfer")
 }
 
 internal object TransferUrls {

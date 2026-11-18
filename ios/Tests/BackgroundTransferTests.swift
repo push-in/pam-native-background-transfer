@@ -196,4 +196,34 @@ final class BackgroundTransferTests: XCTestCase {
         }
         wait(for: [legacy, missing], timeout: 5)
     }
+
+    func testExpiredSignedUrlRewindsOnceToTheStepThatSignedIt() throws {
+        let spec = try TransferSpec.parse(#"""
+        {"version":1,"kind":2,"steps":[
+         {"name":"sign0","method":2,"url":"https://api.example.com/sign","body":{"type":"json","value":{"n":0}}},
+         {"method":3,"url":"{{steps.sign0.data.upload_url}}","headersFrom":"steps.sign0.data.headers",
+          "body":{"type":"file","path":"media/a.jpg","mimeType":"image/jpeg"}},
+         {"name":"sign1","method":2,"url":"https://api.example.com/sign","body":{"type":"json","value":{"n":1}}},
+         {"method":3,"url":"{{steps.sign1.data.upload_url}}","body":{"type":"file","path":"media/b.jpg","mimeType":"image/jpeg"}},
+         {"method":2,"url":"https://api.example.com/posts","body":{"type":"json","value":{"key":"{{steps.sign1.data.key}}"}}},
+         {"method":2,"url":"https://api.example.com/after","body":{"type":"json","value":{"id":"{{response.id}}"}}},
+         {"method":3,"url":"{{response.next}}"}]}
+        """#)
+        let steps = spec.steps
+        XCTAssertEqual(TransferRefresh.rewindTo(steps: steps, failed: 1, statusCode: 403, refreshed: []), 0)
+        XCTAssertEqual(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 401, refreshed: []), 2)
+        XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 403, refreshed: [2]))
+        XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 404, refreshed: []))
+        XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 4, statusCode: 403, refreshed: []))
+        XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 6, statusCode: 403, refreshed: []))
+    }
+
+    func testFailureNotificationShowsOnlyTheAppTexts() {
+        let spec = NotificationSpec(title: "Zé Chat", text: nil, progress: false, completed: "Enviado", failed: "Não foi possível enviar", failedText: "Toque para tentar de novo")
+        XCTAssertEqual(TransferEngine.notificationBody(spec, success: false), "Não foi possível enviar\nToque para tentar de novo")
+        XCTAssertEqual(TransferEngine.notificationBody(spec, success: true), "Enviado")
+        let bare = NotificationSpec(title: "Zé Chat", text: nil, progress: false, completed: nil, failed: "Falhou")
+        XCTAssertEqual(TransferEngine.notificationBody(bare, success: false), "Falhou")
+        XCTAssertNil(TransferEngine.notificationBody(bare, success: true))
+    }
 }

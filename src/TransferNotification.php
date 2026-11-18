@@ -23,6 +23,8 @@ final class TransferNotification
 
     private ?string $failed = null;
 
+    private ?string $failedText = null;
+
     private function __construct(private readonly string $title)
     {
         self::assertText($title);
@@ -67,11 +69,20 @@ final class TransferNotification
         return $this;
     }
 
-    /** Posts a dismissible notification when the transfer fails permanently. */
-    public function failed(string $title): self
+    /**
+     * Posts a dismissible notification when the transfer fails permanently.
+     * Its body is `$text` (pass a localized sentence) or empty: the internal
+     * failure (`TransferSnapshot::$message`, English, technical) is never
+     * shown to the user.
+     */
+    public function failed(string $title, ?string $text = null): self
     {
         self::assertText($title);
+        if ($text !== null) {
+            self::assertText($text);
+        }
         $this->failed = $title;
+        $this->failedText = $text;
 
         return $this;
     }
@@ -86,6 +97,7 @@ final class TransferNotification
             'channel' => $this->channel,
             'completed' => $this->completed,
             'failed' => $this->failed,
+            'failedText' => $this->failedText,
         ], static fn (mixed $value): bool => $value !== null);
     }
 

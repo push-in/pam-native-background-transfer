@@ -64,6 +64,9 @@ $test('serializes a chained multipart upload with typed integer enums', static f
     $assert($wire['kind'] === 2 && $wire['network'] === 2 && $wire['tag'] === 'chat:42' && $wire['unique'] === 'message:abc', 'transfer options mismatch');
     $assert($wire['retry'] === ['times' => 5, 'backoff' => 1, 'delaySeconds' => 60], 'retry mismatch');
     $assert($wire['notification'] === ['title' => 'Enviando vídeo', 'text' => 'Toque para abrir', 'progress' => true, 'completed' => 'Vídeo enviado'], 'notification mismatch');
+    $failure = TransferNotification::make('Zé Chat')->failed('Não foi possível enviar', 'Toque para tentar de novo')->toWire();
+    $assert($failure['failed'] === 'Não foi possível enviar' && $failure['failedText'] === 'Toque para tentar de novo', 'failure text must travel as failedText');
+    $assert(!array_key_exists('failedText', TransferNotification::make('Zé Chat')->failed('Falhou')->toWire()), 'failedText is optional');
     [$upload, $message] = $wire['steps'];
     $assert($upload['method'] === 2 && $upload['name'] === 'upload' && $upload['url'] === 'https://api.example.test/media', 'main step mismatch');
     $assert($upload['body']['parts'][0] === ['type' => 'file', 'name' => 'file', 'path' => 'captures/clip.mov', 'mimeType' => 'video/quicktime', 'filename' => 'clip.mov'], 'file part mismatch');
@@ -178,6 +181,8 @@ $test('lists, cancels, retries, prunes and finds transfers', static function () 
     $fake->succeed('background-transfer', 'cancel');
     $fake->succeed('background-transfer', 'retry');
     $fake->succeed('background-transfer', 'prune', ['removed' => 3]);
+    $fake->succeed('background-transfer', 'forget', ['removed' => true]);
+    $fake->succeed('background-transfer', 'forget', ['removed' => false]);
     $fake->fail('background-transfer', 'status', 'Transfer not found');
     $list = null; $removed = null; $found = false;
     BackgroundTransfer::all(static function (array $rows) use (&$list): void { $list = $rows; }, tag: 'chat:42');
@@ -186,6 +191,11 @@ $test('lists, cancels, retries, prunes and finds transfers', static function () 
     (new TransferHandle($id, TransferKind::Upload))->retry();
     BackgroundTransfer::prune(olderThanDays: 3, then: static function (int $count) use (&$removed): void { $removed = $count; });
     $assert(Wire::decodeMap($fake->lastCall()->payload) === ['olderThanDays' => 3], 'prune payload mismatch');
+    $forgotten = [];
+    BackgroundTransfer::forget($id, static function (bool $existed) use (&$forgotten): void { $forgotten[] = $existed; });
+    $assert(Wire::decodeMap($fake->lastCall()->payload) === ['identifier' => $id], 'forget payload mismatch');
+    (new TransferHandle($id, TransferKind::Upload))->forget(static function (bool $existed) use (&$forgotten): void { $forgotten[] = $existed; });
+    $assert($forgotten === [true, false], 'forget must report whether the transfer existed');
     BackgroundTransfer::find($id, static function (?TransferSnapshot $snapshot) use (&$found): void { $found = $snapshot; });
     $assert(count($list) === 1 && $list[0]->state === TransferState::Failed && $list[0]->response?->statusCode === 500, 'list mismatch');
     $assert($removed === 3 && $found === null, 'prune/find mismatch');

@@ -18,8 +18,9 @@ module request id (`int`).
 | `find(string $id, Closure(?TransferSnapshot) $then)` / `status()` | Durable state; `null` when the id is unknown. |
 | `all(Closure(list<TransferSnapshot>) $then, ?string $tag = null)` | Every stored transfer, optionally by tag. |
 | `retry(string $id, ?Closure(bool) $then = null)` | Resumes a failed/cancelled transfer after its last completed step. |
-| `cancel(string $id, ?Closure(bool) $then = null)` | Cancels; watchers receive `Cancelled`. |
-| `prune(int $olderThanDays = 7, ?Closure(int) $then = null)` | Deletes finished transfers older than 0–3650 days; `$then` receives the number removed. |
+| `cancel(string $id, ?Closure(bool) $then = null)` | Cancels; watchers receive `Cancelled`. The payload stays for `retry()`. |
+| `forget(string $id, ?Closure(bool) $then = null)` | Cancels if running, then deletes the record and its working directory (payload, checkpoint, transcoded video); `$then` receives whether the transfer existed. |
+| `prune(int $olderThanDays = 7, ?Closure(int) $then = null)` | Deletes finished transfers older than 0–3650 days and working directories left without a transfer; `$then` receives the number of transfers removed. |
 
 ### `PendingTransfer` (fluent, `dispatch()` sends it)
 
@@ -69,13 +70,16 @@ to 1 MiB; pass `template: false` for user text.
 
 `make(string $title)`, `text(string)`, `progress(bool $show = true)`,
 `channel(string $name)` (Android channel name, default "Transfers"),
-`completed(string $title)`, `failed(string $title)`, `toWire()`. Texts are
-1–200 characters.
+`completed(string $title)`, `failed(string $title, ?string $text = null)`,
+`toWire()`. Texts are 1–200 characters. The failure notification shows only
+the app's texts (`$text` as its body; pass a localized sentence). The internal
+failure message (`TransferSnapshot::$message`, technical English such as
+`HTTP 413`) is never shown to the user.
 
 ### `TransferHandle`, `TransferWatch`
 
 `TransferHandle` (readonly `id`, `kind`, `tag`): `watch()`, `status()`,
-`cancel()`, `retry()`. `TransferWatch` (readonly `identifier`): `stop()`,
+`cancel()`, `forget()`, `retry()`. `TransferWatch` (readonly `identifier`): `stop()`,
 `active()`. Persist `TransferHandle::$id`; handles are not restored after a
 relaunch.
 

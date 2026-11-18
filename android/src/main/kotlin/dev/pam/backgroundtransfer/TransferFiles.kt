@@ -28,4 +28,8 @@ internal object TransferFiles {
     fun delete(context: Context, id: String) {
         TransferPaths.workDirectory(context, id).deleteRecursively()
     }
+
+    /** Working directories of transfers that no longer have a record. */
+    fun orphans(context: Context, known: Set<String>): List<File> =
+        TransferPaths.workRoot(context).listFiles().orEmpty().filter { it.isDirectory && it.name !in known }
 }

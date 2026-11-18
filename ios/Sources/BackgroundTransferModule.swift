@@ -65,6 +65,8 @@ public final class BackgroundTransferModule: NativeModule, ClosableNativeModule,
                 case "cancel":
                     try self.engine.cancel(try Self.text(values, "identifier"))
                     result = [:]
+                case "forget":
+                    result = ["removed": .flag(self.engine.forget(try Self.text(values, "identifier")))]
                 case "retry":
                     result = Self.wire(try self.engine.retry(try Self.text(values, "identifier")))
                 case "prune":
