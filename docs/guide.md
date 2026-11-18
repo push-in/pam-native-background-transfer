@@ -38,7 +38,7 @@ BackgroundTransfer::upload('{{steps.sign.data.upload_url}}')->put()
     ->dispatch();
 ```
 
-Signed URLs expire. When a step whose URL or headers come from an earlier step (`{{steps.sign…}}`, `{{response…}}`, `headersFrom`) gets HTTP 401 or 403, the transfer runs the producing step again (once per run) and retries with the fresh value; a second 401/403 fails the transfer. This covers a PUT resumed hours after it was signed (offline, retry backoff, process death) and `retry()` of a transfer that failed that way. The producing step must not itself read `{{response…}}` (only the latest response is kept); name it with `as()` and reference it with `{{steps.<name>…}}`.
+Signed URLs expire. When a step whose URL or headers come from an earlier step (`{{steps.sign…}}`, `{{response…}}`, `headersFrom`) gets HTTP 400, 401 or 403 (S3/GCS answer an expired signature with 403 or 400), the transfer runs the producing step again (once per run) and retries with the fresh value; a second failure fails the transfer. This covers a PUT resumed hours after it was signed (offline, retry backoff, process death) and `retry()` of a transfer that failed that way. The producing step must not itself read `{{response…}}` (only the latest response is kept); name it with `as()` and reference it with `{{steps.<name>…}}`.
 
 ### Transcode before upload (with `pushinbr/pam-native-media` 0.4+)
 
@@ -66,7 +66,7 @@ BackgroundTransfer::prune(olderThanDays: 7);
 
 `cancel()` and a permanent failure keep the transfer's working directory (encrypted payload, checkpoint and transcoded video) so `retry()` can resume. Call `forget()` when the transfer will never be retried (a discarded draft), and `prune()` once per launch: it deletes finished transfers older than the given age and any working directory left without a transfer.
 
-Multipart fields built from user text should use `->field($name, $value, template: false)`, which sends the value verbatim. Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
+Multipart fields built from user text should use `->field($name, $value, template: false)`, which sends the value verbatim; in JSON bodies list such values as literal paths: `->json(['caption' => $caption, 'media_items' => $items], literalPaths: ['caption', 'media_items.*.alt_text'])` (`*` matches any key or list index). Templates: `{{response.a.b}}` reads the previous step's JSON response, `{{steps.<name>.a.0.b}}` a step named with `as()`, and `{{transfer.id}}` / `{{transfer.tag}}` the transfer itself. A JSON value that is exactly one template keeps its JSON type. Missing paths fail the transfer without retrying.
 
 Retries cover network errors and HTTP 408/425/429/5xx; other 4xx responses fail immediately with `statusCode` and `response` on the snapshot. Completed steps are checkpointed, so neither automatic nor manual retries repeat them. Mark a non-idempotent step with `->retryable(false)` to fail instead of repeating it automatically.
 

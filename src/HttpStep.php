@@ -129,15 +129,33 @@ final class HttpStep
         return $this;
     }
 
-    /** @param array<array-key, mixed> $payload */
-    public function json(array $payload): self
+    /**
+     * JSON body. String values may reference earlier steps with
+     * `{{templates}}`; values at `$literalPaths` (dot paths into the payload,
+     * `*` matching any key or list index, e.g. `caption` or
+     * `media_items.*.alt_text`) are sent verbatim, so user text is never
+     * template-resolved and can never fail or leak through a template.
+     *
+     * @param array<array-key, mixed> $payload
+     * @param list<string> $literalPaths
+     */
+    public function json(array $payload, array $literalPaths = []): self
     {
         try {
             json_encode($payload, JSON_THROW_ON_ERROR);
         } catch (JsonException $error) {
             throw new InvalidArgumentException('JSON body is not encodable: '.$error->getMessage(), previous: $error);
         }
-        $this->body = ['type' => 'json', 'value' => $payload === [] ? new \stdClass() : $payload];
+        if (count($literalPaths) > 64) {
+            throw new InvalidArgumentException('A JSON body supports at most 64 literal paths.');
+        }
+        foreach ($literalPaths as $path) {
+            if (!is_string($path) || preg_match('/^[A-Za-z0-9_*-]{1,128}(\.[A-Za-z0-9_*-]{1,128}){0,31}$/', $path) !== 1) {
+                throw new InvalidArgumentException('Literal paths are dot paths such as "caption" or "items.*.text".');
+            }
+        }
+        $this->body = ['type' => 'json', 'value' => $payload === [] ? new \stdClass() : $payload]
+            + ($literalPaths === [] ? [] : ['literal' => array_values(array_unique($literalPaths))]);
 
         return $this;
     }

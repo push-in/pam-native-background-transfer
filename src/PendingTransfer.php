@@ -84,10 +84,13 @@ final class PendingTransfer
         return $this;
     }
 
-    /** @param array<array-key, mixed> $payload */
-    public function json(array $payload): self
+    /**
+     * @param array<array-key, mixed> $payload
+     * @param list<string> $literalPaths values sent verbatim (see HttpStep::json())
+     */
+    public function json(array $payload, array $literalPaths = []): self
     {
-        $this->step->json($payload);
+        $this->step->json($payload, $literalPaths);
 
         return $this;
     }

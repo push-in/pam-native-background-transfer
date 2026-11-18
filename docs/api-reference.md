@@ -27,7 +27,7 @@ module request id (`int`).
 | Method | Description |
 | --- | --- |
 | `method(HttpMethod)`, `put()`, `patch()` | HTTP method of the main step. |
-| `multipart(Closure(Multipart))`, `file(string $path, string $mimeType)`, `json(array)`, `form(array)` | Body (uploads stream from disk). |
+| `multipart(Closure(Multipart))`, `file(string $path, string $mimeType)`, `json(array $payload, list<string> $literalPaths = [])`, `form(array)` | Body (uploads stream from disk). `$literalPaths` (dot paths, `*` any key or index) are sent verbatim, never template-resolved. |
 | `to(string $path)` | Download destination (sandbox path). |
 | `header(string, string\|Secret)`, `headers(array)`, `headersFrom(string $templatePath)`, `bearer(string\|Secret)` | Headers; `headersFrom('steps.sign.data.headers')` copies a JSON object from an earlier step. |
 | `as(string $name)` | Names the main step for `{{steps.<name>…}}`. |
@@ -44,7 +44,7 @@ module request id (`int`).
 
 `to(HttpMethod, string $url)`, `get()`, `post()`, `put()`, `patch()`,
 `delete()`; `method()`, `as(string $name)`, `header()`, `headers()`,
-`headersFrom()`, `bearer()`, `json(array)`, `form(array)`,
+`headersFrom()`, `bearer()`, `json(array, list<string> $literalPaths = [])`, `form(array)`,
 `multipart(Closure)`, `file(string $path, string $mimeType)`,
 `saveTo(string $path)` (write the response body to a file),
 `retryable(bool $retryable = true)`; `hasBody()`, `savesToFile()`, `files()`,
@@ -69,7 +69,9 @@ to 1 MiB; pass `template: false` for user text.
 ### `TransferNotification`
 
 `make(string $title)`, `text(string)`, `progress(bool $show = true)`,
-`channel(string $name)` (Android channel name, default "Transfers"),
+`channel(string $name, ?string $results = null)` (Android channel names for
+progress, default "Transfers", and for completion/failure, default `$name`; a
+changed label renames the existing channel and keeps the user's importance),
 `completed(string $title)`, `failed(string $title, ?string $text = null)`,
 `toWire()`. Texts are 1–200 characters. The failure notification shows only
 the app's texts (`$text` as its body; pass a localized sentence). The internal

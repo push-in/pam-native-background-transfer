@@ -106,6 +106,7 @@ class TransferSpecTest {
         assertEquals(2, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 401, refreshed = emptySet()))
         assertEquals(null, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 403, refreshed = setOf(2)))
         // Other statuses, body-only references and steps without producers fail as before.
+        assertEquals(2, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 400, refreshed = emptySet()))
         assertEquals(null, TransferRefresh.rewindTo(steps, failed = 3, statusCode = 404, refreshed = emptySet()))
         assertEquals(null, TransferRefresh.rewindTo(steps, failed = 4, statusCode = 403, refreshed = emptySet()))
         assertEquals(null, TransferRefresh.rewindTo(steps, failed = 0, statusCode = 403, refreshed = emptySet()))
@@ -120,5 +121,36 @@ class TransferSpecTest {
         assertEquals("Toque para tentar de novo", notification.resultText(success = false))
         assertEquals(null, notification.resultText(success = true))
         assertEquals(null, notification.copy(failedText = null).resultText(success = false))
+    }
+
+    @Test
+    fun literalJsonPathsAreSentVerbatim() {
+        val step = TransferSpec.parse(
+            """{"version":1,"kind":3,"steps":[{"method":2,"url":"https://api.example.test/posts",
+              "body":{"type":"json","value":{"caption":"{{response.id}} oi","key":"{{response.id}}",
+                "items":[{"alt":"{{x}}","key":"{{response.id}}"},{"alt":"{{steps.y}}"}]},
+              "literal":["caption","items.*.alt"]}}]}""",
+        ).steps.single()
+        val body = step.body as BodySpec.Json
+        assertEquals(listOf("caption", "items.*.alt"), body.literal)
+        val templates = TransferTemplates("id-12345678", null, JSONObject().put("id", 7), emptyMap())
+        val resolved = templates.json(body.value, body.literal) as JSONObject
+        assertEquals("{{response.id}} oi", resolved.getString("caption"))
+        assertEquals(7, resolved.get("key"))
+        val items = resolved.getJSONArray("items")
+        assertEquals("{{x}}", items.getJSONObject(0).getString("alt"))
+        assertEquals(7, items.getJSONObject(0).get("key"))
+        assertEquals("{{steps.y}}", items.getJSONObject(1).getString("alt"))
+        assertTrue(runCatching {
+            TransferSpec.parse("""{"version":1,"kind":3,"steps":[{"method":2,"url":"https://a.test/x","body":{"type":"json","value":{},"literal":["a..b"]}}]}""")
+        }.isFailure)
+    }
+
+    @Test
+    fun theResultChannelHasItsOwnLabel() {
+        val spec = NotificationSpec("Zé Chat", null, false, "Envios", null, "Falhou")
+        assertEquals("Envios", spec.resultChannelName())
+        assertEquals("Resultados de envio", spec.copy(resultChannel = "Resultados de envio").resultChannelName())
+        assertEquals("Transfers", spec.copy(channel = null).resultChannelName())
     }
 }

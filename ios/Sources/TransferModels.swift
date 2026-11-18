@@ -81,7 +81,8 @@ enum PartSpec {
 }
 
 enum BodySpec {
-    case json(Any)
+    /// `literal`: dot paths (`*` matches any key or index) sent verbatim (user text).
+    case json(Any, literal: [String])
     case form([(String, Any)])
     case file(path: String, mimeType: String)
     case multipart([PartSpec])
@@ -160,7 +161,11 @@ struct StepSpec {
         switch json["type"] as? String {
         case "json":
             guard let value = json["value"] else { throw TransferError("JSON body needs a value") }
-            return .json(value)
+            let literal = (json["literal"] as? [String]) ?? []
+            guard literal.count <= 64, literal.allSatisfy({
+                $0.range(of: #"^[A-Za-z0-9_*-]{1,128}(\.[A-Za-z0-9_*-]{1,128}){0,31}$"#, options: .regularExpression) != nil
+            }) else { throw TransferError("Invalid literal path") }
+            return .json(value, literal: literal)
         case "form":
             let fields = (json["fields"] as? [String: Any]) ?? [:]
             return .form(fields.sorted { $0.key < $1.key }.map { ($0.key, $0.value) })
@@ -391,8 +396,18 @@ struct TransferTemplates {
         return output
     }
 
-    /// A string that is exactly one template keeps the referenced JSON type.
-    func json(_ value: Any) throws -> Any {
+    /// A string that is exactly one template keeps the referenced JSON type;
+    /// values at `literal` dot paths (`*` matches any key or index) stay verbatim.
+    func json(_ value: Any, literal: [String]) throws -> Any {
+        try json(value, literal: literal.map { $0.split(separator: ".").map(String.init) }, path: [])
+    }
+
+    private func json(_ value: Any, literal: [[String]], path: [String]) throws -> Any {
+        if literal.contains(where: { pattern in
+            pattern.count == path.count && zip(pattern, path).allSatisfy { $0 == "*" || $0 == $1 }
+        }) {
+            return value
+        }
         switch value {
         case let text as String:
             let range = NSRange(location: 0, length: (text as NSString).length)
@@ -401,12 +416,19 @@ struct TransferTemplates {
             }
             return try string(text)
         case let object as [String: Any]:
-            return try object.mapValues { try json($0) }
+            var copy: [String: Any] = [:]
+            for (key, item) in object { copy[key] = try json(item, literal: literal, path: path + [key]) }
+            return copy
         case let array as [Any]:
-            return try array.map { try json($0) }
+            return try array.enumerated().map { try json($1, literal: literal, path: path + [String($0)]) }
         default:
             return value
         }
+    }
+
+    /// Resolves every template (no literal paths).
+    func json(_ value: Any) throws -> Any {
+        try json(value, literal: [])
     }
 
     func lookup(_ path: String) throws -> Any {

@@ -67,6 +67,19 @@ $test('serializes a chained multipart upload with typed integer enums', static f
     $failure = TransferNotification::make('Zé Chat')->failed('Não foi possível enviar', 'Toque para tentar de novo')->toWire();
     $assert($failure['failed'] === 'Não foi possível enviar' && $failure['failedText'] === 'Toque para tentar de novo', 'failure text must travel as failedText');
     $assert(!array_key_exists('failedText', TransferNotification::make('Zé Chat')->failed('Falhou')->toWire()), 'failedText is optional');
+    $channels = TransferNotification::make('Zé Chat')->channel('Envios', 'Resultados de envio')->toWire();
+    $assert($channels['channel'] === 'Envios' && $channels['resultChannel'] === 'Resultados de envio', 'result channel label mismatch');
+    $assert(!array_key_exists('resultChannel', TransferNotification::make('Zé Chat')->channel('Envios')->toWire()), 'result channel label is optional');
+    $literal = HttpStep::post('https://api.example.test/posts')->json(['caption' => '{{x}}', 'items' => [['alt' => 'a']]], ['caption', 'items.*.alt', 'caption'])->toWire();
+    $assert($literal['body']['literal'] === ['caption', 'items.*.alt'], 'literal JSON paths must travel deduplicated');
+    $assert(!array_key_exists('literal', HttpStep::post('https://api.example.test/posts')->json(['a' => 1])->toWire()['body']), 'literal paths are optional');
+    $badPath = false;
+    try {
+        HttpStep::post('https://api.example.test/posts')->json(['a' => 1], ['a..b']);
+    } catch (InvalidArgumentException) {
+        $badPath = true;
+    }
+    $assert($badPath, 'invalid literal paths must be rejected');
     [$upload, $message] = $wire['steps'];
     $assert($upload['method'] === 2 && $upload['name'] === 'upload' && $upload['url'] === 'https://api.example.test/media', 'main step mismatch');
     $assert($upload['body']['parts'][0] === ['type' => 'file', 'name' => 'file', 'path' => 'captures/clip.mov', 'mimeType' => 'video/quicktime', 'filename' => 'clip.mov'], 'file part mismatch');

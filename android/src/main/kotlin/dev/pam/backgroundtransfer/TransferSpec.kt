@@ -72,7 +72,11 @@ internal data class NotificationSpec(
     val completed: String?,
     val failed: String?,
     val failedText: String? = null,
+    /** Label of the completion/failure channel; defaults to [channel]. */
+    val resultChannel: String? = null,
 ) {
+    fun resultChannelName(): String = resultChannel ?: channel ?: "Transfers"
+
     /** Body of the result notification: only the app's (localized) failure text, never the internal message. */
     fun resultText(success: Boolean): String? = if (success) null else failedText?.takeIf { it.isNotBlank() }
 
@@ -85,6 +89,7 @@ internal data class NotificationSpec(
             completed = json.optStringOrNull("completed")?.take(200),
             failed = json.optStringOrNull("failed")?.take(200),
             failedText = json.optStringOrNull("failedText")?.take(200),
+            resultChannel = json.optStringOrNull("resultChannel")?.take(200),
         )
     }
 }
@@ -159,7 +164,8 @@ internal data class StepSpec(
 internal sealed interface BodySpec {
     fun files(): List<String>
 
-    data class Json(val value: Any) : BodySpec {
+    /** [literal]: dot paths (`*` matches any key or index) sent verbatim, never template-resolved (user text). */
+    data class Json(val value: Any, val literal: List<String> = emptyList()) : BodySpec {
         override fun files() = emptyList<String>()
     }
 
@@ -177,7 +183,13 @@ internal sealed interface BodySpec {
 
     companion object {
         fun parse(json: JSONObject): BodySpec = when (json.getString("type")) {
-            "json" -> Json(json.get("value"))
+            "json" -> Json(
+                json.get("value"),
+                json.optJSONArray("literal")?.let { paths ->
+                    require(paths.length() <= 64) { "A JSON body supports at most 64 literal paths" }
+                    List(paths.length()) { paths.getString(it).also { path -> require(path.matches(LITERAL_PATH)) { "Invalid literal path" } } }
+                }.orEmpty(),
+            )
             "form" -> Form(json.optJSONObject("fields") ?: JSONObject())
             "file" -> File(
                 json.getString("path").also(TransferPaths::requireRelative),
@@ -224,6 +236,8 @@ internal sealed interface PartSpec {
         }
     }
 }
+
+private val LITERAL_PATH = Regex("[A-Za-z0-9_*-]{1,128}(\\.[A-Za-z0-9_*-]{1,128}){0,31}")
 
 private val MIME = Regex("[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}")
 

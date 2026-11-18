@@ -4,9 +4,9 @@ import Foundation
 /// or headers come from an earlier step (`{{steps.sign.data.upload_url}}`,
 /// `headersFrom`) may run hours after that step (offline, retry backoff,
 /// relaunch, manual retry): a signed URL has expired by then and the storage
-/// answers 401/403 forever. On 401/403 the transfer rewinds once per run to
-/// the producing step, which runs again for a fresh value; a second 401/403
-/// with the fresh value fails the transfer.
+/// answers 400/401/403 forever. On 400/401/403 the transfer rewinds once per
+/// run to the producing step, which runs again for a fresh value; a second
+/// failure with the fresh value fails the transfer.
 enum TransferRefresh {
     private static let reference = try! NSRegularExpression(
         pattern: #"\{\{\s*(response|steps\.([A-Za-z0-9_\-]+))[.\s}]"#
@@ -14,7 +14,7 @@ enum TransferRefresh {
 
     /// Index of the step to resume from, or nil when the failure stands.
     static func rewindTo(steps: [StepSpec], failed: Int, statusCode: Int, refreshed: Set<Int>) -> Int? {
-        guard statusCode == 401 || statusCode == 403, steps.indices.contains(failed) else { return nil }
+        guard [400, 401, 403].contains(statusCode), steps.indices.contains(failed) else { return nil }
         let step = steps[failed]
         var texts = [step.url] + step.headers.compactMap(\.value)
         if let path = step.headersFrom { texts.append("{{\(path)}}") }
@@ -46,7 +46,7 @@ enum TransferRefresh {
         var texts = [step.url] + step.headers.compactMap(\.value)
         if let path = step.headersFrom { texts.append("{{\(path)}}") }
         switch step.body {
-        case let .json(value)?: texts.append(String(describing: value))
+        case let .json(value, _)?: texts.append(String(describing: value))
         case let .form(fields)?: texts += fields.map { String(describing: $0.1) }
         case let .multipart(parts)?:
             for case let .field(_, value, literal) in parts where !literal { texts.append(value) }

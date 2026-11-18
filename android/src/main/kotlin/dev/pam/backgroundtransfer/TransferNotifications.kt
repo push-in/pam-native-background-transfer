@@ -57,7 +57,7 @@ internal object TransferNotifications {
         ) {
             return
         }
-        ensureChannel(context, RESULT_CHANNEL, spec.channel ?: "Transfers", NotificationManager.IMPORTANCE_DEFAULT)
+        ensureChannel(context, RESULT_CHANNEL, spec.resultChannelName(), NotificationManager.IMPORTANCE_DEFAULT)
         val builder = NotificationCompat.Builder(context, RESULT_CHANNEL)
             .setContentTitle(title)
             .setSmallIcon(if (success) android.R.drawable.stat_sys_upload_done else android.R.drawable.stat_notify_error)
@@ -67,10 +67,15 @@ internal object TransferNotifications {
         runCatching { NotificationManagerCompat.from(context).notify(notificationId(id) + 1, builder.build()) }
     }
 
+    /**
+     * Always (re)creates the channel: for an existing id the system only
+     * updates its name (a new locale, a renamed label) and keeps the
+     * importance the user chose.
+     */
     private fun ensureChannel(context: Context, id: String, name: String, importance: Int) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return // no channels before Android 8
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        if (manager.getNotificationChannel(id) == null) manager.createNotificationChannel(NotificationChannel(id, name, importance))
+        manager.createNotificationChannel(NotificationChannel(id, name, importance))
     }
 
     private fun launchIntent(context: Context): PendingIntent? =

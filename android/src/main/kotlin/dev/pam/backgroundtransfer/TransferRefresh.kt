@@ -4,16 +4,18 @@ package dev.pam.backgroundtransfer
  * Stale step outputs. A step whose URL or headers come from an earlier step
  * (`{{steps.sign.data.upload_url}}`, `headersFrom`) may run hours after that
  * step (offline, retry backoff, process death, manual retry): a signed URL
- * has expired by then and the storage answers 401/403 forever. On 401/403 the
+ * has expired by then and the storage answers 400/401/403 forever (S3 and GCS
+ * answer an expired signature with 403 or 400). On 400/401/403 the
  * transfer rewinds once per run to the producing step, which runs again for
- * a fresh value; a second 401/403 with the fresh value fails the transfer.
+ * a fresh value; a second failure with the fresh value fails the transfer.
  */
 internal object TransferRefresh {
+    private val REFRESH_STATUSES = setOf(400, 401, 403)
     private val REFERENCE = Regex("""\{\{\s*(response|steps\.([A-Za-z0-9_\-]+))[.\s}]""")
 
     /** Index of the step to resume from, or null when the failure stands. */
     fun rewindTo(steps: List<StepSpec>, failed: Int, statusCode: Int, refreshed: Set<Int>): Int? {
-        if (statusCode != 401 && statusCode != 403) return null
+        if (statusCode !in REFRESH_STATUSES) return null
         val step = steps.getOrNull(failed) ?: return null
         val producers = producers(steps, failed, step)
         return producers.filter { it !in refreshed && replayable(steps[it]) }.minOrNull()

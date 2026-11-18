@@ -24,13 +24,24 @@ internal class TransferTemplates(
         }
     }
 
-    /** Resolves templates inside JSON; a string that is exactly one template keeps the referenced JSON type. */
-    fun json(value: Any?): Any? = when (value) {
-        is String -> PATTERN.matchEntire(value.trim())?.takeIf { value.trim() == value }?.let { lookup(it.groupValues[1]) } ?: string(value)
-        is JSONObject -> JSONObject().also { copy -> value.keys().forEach { key -> copy.put(key, json(value.get(key))) } }
-        is JSONArray -> JSONArray().also { copy -> for (index in 0 until value.length()) copy.put(json(value.get(index))) }
+    /**
+     * Resolves templates inside JSON; a string that is exactly one template
+     * keeps the referenced JSON type. Values at [literal] dot paths (`*`
+     * matches any key or index) are kept verbatim.
+     */
+    fun json(value: Any?, literal: List<String> = emptyList()): Any? =
+        json(value, literal.map { it.split('.') }, emptyList())
+
+    private fun json(value: Any?, literal: List<List<String>>, path: List<String>): Any? = when {
+        literal.any { matches(it, path) } -> value
+        value is String -> PATTERN.matchEntire(value.trim())?.takeIf { value.trim() == value }?.let { lookup(it.groupValues[1]) } ?: string(value)
+        value is JSONObject -> JSONObject().also { copy -> value.keys().forEach { key -> copy.put(key, json(value.get(key), literal, path + key)) } }
+        value is JSONArray -> JSONArray().also { copy -> for (index in 0 until value.length()) copy.put(json(value.get(index), literal, path + index.toString())) }
         else -> value
     }
+
+    private fun matches(pattern: List<String>, path: List<String>): Boolean =
+        pattern.size == path.size && pattern.indices.all { pattern[it] == "*" || pattern[it] == path[it] }
 
     fun lookup(path: String): Any? {
         val segments = path.split('.')

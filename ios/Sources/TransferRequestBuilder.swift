@@ -76,8 +76,8 @@ enum TransferRequestBuilder {
         switch step.body {
         case nil:
             return Built(request: request, bodyFile: try temporary(Data(), in: workDirectory))
-        case let .json(value)?:
-            let data = try JSONSerialization.data(withJSONObject: try templates.json(value), options: [.fragmentsAllowed])
+        case let .json(value, literal)?:
+            let data = try JSONSerialization.data(withJSONObject: try templates.json(value, literal: literal), options: [.fragmentsAllowed])
             request.setValue("application/json; charset=utf-8", forHTTPHeaderField: "Content-Type")
             return Built(request: request, bodyFile: try temporary(data, in: workDirectory))
         case let .form(fields)?:

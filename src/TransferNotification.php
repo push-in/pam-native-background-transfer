@@ -19,6 +19,8 @@ final class TransferNotification
 
     private ?string $channel = null;
 
+    private ?string $resultChannel = null;
+
     private ?string $completed = null;
 
     private ?string $failed = null;
@@ -51,11 +53,21 @@ final class TransferNotification
         return $this;
     }
 
-    /** User-visible Android notification channel name (defaults to "Transfers"). */
-    public function channel(string $name): self
+    /**
+     * User-visible Android notification channel names: `$name` for the
+     * progress notification (defaults to "Transfers") and `$results` for the
+     * completion/failure notifications (defaults to `$name`). Pass localized
+     * labels; a changed label renames the existing channel and keeps the
+     * importance the user chose.
+     */
+    public function channel(string $name, ?string $results = null): self
     {
         self::assertText($name);
+        if ($results !== null) {
+            self::assertText($results);
+        }
         $this->channel = $name;
+        $this->resultChannel = $results;
 
         return $this;
     }
@@ -95,6 +107,7 @@ final class TransferNotification
             'text' => $this->text,
             'progress' => $this->progress,
             'channel' => $this->channel,
+            'resultChannel' => $this->resultChannel,
             'completed' => $this->completed,
             'failed' => $this->failed,
             'failedText' => $this->failedText,

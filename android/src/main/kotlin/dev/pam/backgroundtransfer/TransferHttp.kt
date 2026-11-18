@@ -103,7 +103,7 @@ internal class TransferHttp(
         val counter: (Long) -> Unit = progress
         val body: RequestBody? = when (val spec = step.body) {
             null -> if (step.method in setOf("POST", "PUT", "PATCH")) ByteArray(0).toRequestBody(null) else null
-            is BodySpec.Json -> templates.json(spec.value).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+            is BodySpec.Json -> templates.json(spec.value, spec.literal).toString().toRequestBody("application/json; charset=utf-8".toMediaType())
             is BodySpec.Form -> FormBody.Builder().apply {
                 spec.fields.keys().forEach { name -> add(name, templates.string(spec.fields.get(name).toString())) }
             }.build()

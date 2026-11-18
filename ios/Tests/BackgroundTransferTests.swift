@@ -213,6 +213,7 @@ final class BackgroundTransferTests: XCTestCase {
         XCTAssertEqual(TransferRefresh.rewindTo(steps: steps, failed: 1, statusCode: 403, refreshed: []), 0)
         XCTAssertEqual(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 401, refreshed: []), 2)
         XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 403, refreshed: [2]))
+        XCTAssertEqual(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 400, refreshed: []), 2)
         XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 3, statusCode: 404, refreshed: []))
         XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 4, statusCode: 403, refreshed: []))
         XCTAssertNil(TransferRefresh.rewindTo(steps: steps, failed: 6, statusCode: 403, refreshed: []))
@@ -225,5 +226,17 @@ final class BackgroundTransferTests: XCTestCase {
         let bare = NotificationSpec(title: "Zé Chat", text: nil, progress: false, completed: nil, failed: "Falhou")
         XCTAssertEqual(TransferEngine.notificationBody(bare, success: false), "Falhou")
         XCTAssertNil(TransferEngine.notificationBody(bare, success: true))
+    }
+
+    func testLiteralJsonPathsAreSentVerbatim() throws {
+        let templates = TransferProgress(next: 1, last: #"{"id":7}"#, named: [:]).templates(id: "abc", tag: nil)
+        let value: [String: Any] = ["caption": "{{response.id}} oi", "key": "{{response.id}}", "items": [["alt": "{{x}}", "key": "{{response.id}}"]]]
+        let resolved = try XCTUnwrap(try templates.json(value, literal: ["caption", "items.*.alt"]) as? [String: Any])
+        XCTAssertEqual(resolved["caption"] as? String, "{{response.id}} oi")
+        XCTAssertEqual(resolved["key"] as? Int, 7)
+        let item = try XCTUnwrap((resolved["items"] as? [[String: Any]])?.first)
+        XCTAssertEqual(item["alt"] as? String, "{{x}}")
+        XCTAssertEqual(item["key"] as? Int, 7)
+        XCTAssertThrowsError(try TransferSpec.parse(#"{"version":1,"kind":3,"steps":[{"method":2,"url":"https://a.b/x","body":{"type":"json","value":{},"literal":["a..b"]}}]}"#))
     }
 }
