@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 - 2026-11-18
+
+- Fixed: failure notifications never show the internal error; TransferNotification::failed() takes an optional localized text.
+- Added: BackgroundTransfer::forget() deletes a transfer and its working directory; prune() also removes orphaned directories.
+- Fixed: a step whose URL or headers come from an earlier step re-runs that step once on HTTP 400/401/403 (expired signed URL), also on retry().
+- Fixed: notification channels are renamed in place; channel() takes a separate results label.
+- Added: HttpStep::json() / PendingTransfer::json() accept literalPaths sent verbatim.
+
 ## 0.4.3 - 2026-11-17
 
 - Android 7.0/7.1 support: the plugin declares minSdk 24 and every newer Android API it uses has a version check and fallback. Requires PAM Native 1.53.1 or later.
